@@ -14,9 +14,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Unpack project
-        run: |
-          unzip -o monsterball-godot-v300.zip
-          rm monsterball-godot-v300.zip
+        run: 
+unzip -o monsterball-minimal-apk-test.zip
+        rm monsterball-minimal-apk-test.zip
 
       - name: Commit project
         run: |
