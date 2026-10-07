@@ -1,0 +1,27 @@
+name: Unpack Monster Ball
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unpack project
+        run: |
+          unzip -o monsterball-godot-v300.zip
+          rm monsterball-godot-v300.zip
+
+      - name: Commit project
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add -A
+          git commit -m "Unpack Godot project" || exit 0
+          git push
