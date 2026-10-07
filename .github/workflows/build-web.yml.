@@ -1,0 +1,33 @@
+name: Build Monster Ball Web
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.5.1
+          use-dotnet: false
+          include-templates: true
+
+      - name: Import project
+        run: godot --headless --path . --import
+
+      - name: Build Web
+        run: |
+          mkdir -p build/web
+          godot --headless --path . --export-release "Web" build/web/index.html
+
+      - name: Upload Web
+        uses: actions/upload-artifact@v4
+        with:
+          name: MonsterBall-Web
+          path: build/web/
