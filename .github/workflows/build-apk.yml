@@ -11,6 +11,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          sdkmanager "platform-tools" "build-tools;35.0.0" "platforms;android-35"
+
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
@@ -18,7 +31,19 @@ jobs:
           use-dotnet: false
           include-templates: true
 
+      - name: Configure Godot Android paths
+        run: |
+          mkdir -p ~/.config/godot
+          godot --headless --editor --quit \
+            --path . \
+            --editor-settings-path ~/.config/godot
+
+      - name: Import project
+        run: godot --headless --path . --import
+
       - name: Build APK
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           mkdir -p build
           godot --headless --path . --export-debug "Android" build/MonsterBall.apk
