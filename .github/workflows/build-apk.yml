@@ -1,0 +1,30 @@
+name: Build Monster Ball APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.5.1
+          use-dotnet: false
+          include-templates: true
+
+      - name: Build APK
+        run: |
+          mkdir -p build
+          godot --headless --path . --export-debug "Android" build/MonsterBall.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MonsterBall-Android
+          path: build/MonsterBall.apk
