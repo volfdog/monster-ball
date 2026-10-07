@@ -19,9 +19,7 @@ jobs:
 
 
 
-      - name: Install Android packages
-        run: |
-          sdkmanager "platform-tools" "build-tools;35.0.0" "platforms;android-35"
+    
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
