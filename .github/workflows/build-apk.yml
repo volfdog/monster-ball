@@ -17,31 +17,39 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-
-
-    
-
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
           version: 4.5.1
           use-dotnet: false
           include-templates: true
-      - name: Configure Godot Android paths
+
+      - name: Configure Android for Godot
         run: |
           mkdir -p ~/.config/godot
-          godot --headless --editor --quit \
-            --path . \
-            --editor-settings-path ~/.config/godot \
-            --path .
-            --editor-settings-path ~/.config/godot
+          cat > ~/.config/godot/editor_settings-4.tres <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "/usr/local/lib/android/sdk"
+          export/android/java_sdk_path = "${JAVA_HOME}"
+          export/android/shutdown_adb_on_exit = false
+          EOF
+
+      - name: Check Android
+        run: |
+          test -f /usr/local/lib/android/sdk/platform-tools/adb
+          java -version
+          godot --version
 
       - name: Import project
-        run: godot --headless --path . --import
+        run: |
+          godot --headless --path . --import
 
       - name: Build APK
         env:
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
           mkdir -p build
           godot --headless --path . --export-debug "Android" build/MonsterBall.apk
