@@ -27,12 +27,13 @@ jobs:
           version: 4.5.1
           use-dotnet: false
           include-templates: true
-
       - name: Configure Godot Android paths
         run: |
           mkdir -p ~/.config/godot
           godot --headless --editor --quit \
             --path . \
+            --editor-settings-path ~/.config/godot \
+            --path .
             --editor-settings-path ~/.config/godot
 
       - name: Import project
