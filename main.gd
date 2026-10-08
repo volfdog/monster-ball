@@ -48,6 +48,15 @@ var fancy_font: Font
 
 func _process(delta: float) -> void:
     magic_clock += delta
+    if fx_progress < 1.0:
+        fx_progress = minf(1.0, fx_progress + delta * 5.0)
+        queue_redraw()
+    if fx_impact_time > 0.0:
+        fx_impact_time = maxf(0.0, fx_impact_time - delta)
+        queue_redraw()
+    if fx_bounce_time > 0.0:
+        fx_bounce_time = maxf(0.0, fx_bounce_time - delta)
+        queue_redraw()
     if selected >= 0 or drag_active: queue_redraw()
     if customization_open:
         flame_time += delta
@@ -162,8 +171,13 @@ func _drag_event(event: InputEvent) -> bool:
             drag_origin = Vector2i(-1, -1)
             if drag_moved:
                 var target: Vector2i = _drag_point_to_cell(point)
-                if _drag_cell_valid(target) and target != old:
+                if _valid_drop(target) and target != old:
                     _tap(target)
+                else:
+                    fx_bounce_from = _drag_cell_center(old)
+                    fx_bounce_start = point
+                    fx_bounce_piece = selected
+                    fx_bounce_time = 0.22
             drag_moved = false
             queue_redraw()
         return true
@@ -178,6 +192,19 @@ func _drag_event(event: InputEvent) -> bool:
             queue_redraw()
             return true
     return false
+
+func _valid_drop(cell: Vector2i) -> bool:
+    if selected < 0 or not _inside(cell) or _piece_at(cell) >= 0:
+        return false
+    for capture in _captures(selected):
+        if capture["cell"] == cell:
+            return true
+    if _team_must_capture(turn):
+        return false
+    var source: Vector2i = pieces[selected]["cell"]
+    var dr: int = cell.x - source.x
+    var dc: int = absi(cell.y - source.y)
+    return absi(dr) == 1 and dc == 1 and (ball_holder != selected or dr == (-1 if turn == 1 else 1))
 
 func _drag_point_to_cell(point: Vector2) -> Vector2i:
     var g: Dictionary = _geometry()
@@ -219,6 +246,80 @@ func _draw_drag_hints() -> void:
         if _inside(target) and _piece_at(target) < 0 and (ball_holder != selected or direction.x == forward):
             _magic_ring(origin + Vector2(target.y + 0.5, target.x + 0.5) * side, side * 0.28, Color("#71f9b0"))
 
+
+# Visual-only animations; the board rules update immediately.
+var fx_piece: int = -1
+var fx_from: Vector2i = Vector2i(-1, -1)
+var fx_to: Vector2i = Vector2i(-1, -1)
+var fx_progress: float = 1.0
+var fx_impact: Vector2i = Vector2i(-1, -1)
+var fx_impact_time: float = 0.0
+var fx_bounce_from: Vector2 = Vector2.ZERO
+var fx_bounce_start: Vector2 = Vector2.ZERO
+var fx_bounce_piece: int = -1
+var fx_bounce_start: Vector2 = Vector2.ZERO
+var fx_bounce_piece: int = -1
+var fx_bounce_time: float = 0.0
+
+func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void:
+    fx_piece = index
+    fx_from = origin
+    fx_to = destination
+    fx_progress = 0.0
+
+func _start_hit_fx(cell: Vector2i) -> void:
+    fx_impact = cell
+    fx_impact_time = 0.55
+
+func _draw_game_fx() -> void:
+    var g: Dictionary = _geometry()
+    var side: float = g["cell_size"]
+    if fx_impact_time > 0.0 and _inside(fx_impact):
+        var center: Vector2 = _drag_cell_center(fx_impact)
+        var t: float = 1.0 - fx_impact_time / 0.55
+        draw_arc(center, side * (0.14 + t * 0.45), 0.0, TAU, 42, Color(1.0, 0.45, 0.13, 1.0-t), 3.0)
+        for j in 8:
+            var a: float = TAU * float(j) / 8.0 + t * 0.5
+            var d: Vector2 = Vector2(cos(a), sin(a))
+            draw_line(center + d * side * t * 0.20, center + d * side * (0.18 + t * 0.42), Color(1.0, 0.75, 0.25, 1.0-t), 2.5)
+    if fx_bounce_time > 0.0:
+        var t: float = 1.0 - fx_bounce_time / 0.22
+        var c: Vector2 = fx_bounce_start.lerp(fx_bounce_from, t)
+        if fx_bounce_piece >= 0 and fx_bounce_piece < pieces.size():
+            var team_id: int = int(pieces[fx_bounce_piece]["team"])
+            var key: String = BLUE_SKINS[piece_skins[fx_bounce_piece]] if team_id == 1 else RED_SKINS[piece_skins[fx_bounce_piece]]
+            _draw_asset(key, Rect2(c - Vector2.ONE * side * 0.44, Vector2.ONE * side * 0.88))
+        draw_arc(c, side * (0.25 + 0.22 * t), 0.0, TAU, 36, Color(0.45, 0.95, 1.0, 0.65 * (1.0-t)), 2.5)
+
+func _living(team_id: int) -> int:
+    var n: int = 0
+    for p in pieces:
+        if bool(p["alive"]) and int(p["team"]) == team_id:
+            n += 1
+    return n
+
+func _award_point(team_id: int, reason: String) -> void:
+    scores[team_id - 1] += 1
+    if scores[team_id - 1] >= 3:
+        winner = team_id
+        game_over = true
+        selected = -1
+        bot_pending = false
+        message = "ПОБЕДА!" if game_mode == 1 or team_id == 1 else "ВЫ ПРОИГРАЛИ"
+    else:
+        _reset_board()
+        message = "%s  %d : %d" % [reason, scores[0], scores[1]]
+    queue_redraw()
+
+func _check_elimination() -> bool:
+    if _living(1) == 0:
+        _award_point(2, "ВСЕ СИНИЕ ФИШКИ СЪЕДЕНЫ!")
+        return true
+    if _living(2) == 0:
+        _award_point(1, "ВСЕ КРАСНЫЕ ФИШКИ СЪЕДЕНЫ!")
+        return true
+    return false
+
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
     if ResourceLoader.exists("res://assets/game_font.ttf"):
@@ -235,6 +336,8 @@ func _ready() -> void:
 
 func _reset_board() -> void:
     pieces.clear()
+    fx_progress = 1.0
+    fx_impact_time = 0.0
     for c in [0, 2, 4, 6]:
         pieces.append({"team": 1, "cell": Vector2i(9, c + 1), "alive": true})
     for c in [1, 3, 5, 7]:
@@ -354,9 +457,12 @@ func _tap(cell: Vector2i) -> void:
     for capture in _captures(selected):
         if capture["cell"] == cell:
             pieces[capture["victim"]]["alive"] = false
+            _start_hit_fx(pieces[capture["victim"]]["cell"])
             if ball_holder == capture["victim"]:
                 ball_holder = selected
             _move_selected(cell)
+            if _check_elimination():
+                return
             if _check_goal():
                 return
             if not _captures(selected).is_empty():
@@ -382,6 +488,8 @@ func _tap(cell: Vector2i) -> void:
         queue_redraw()
 
 func _move_selected(cell: Vector2i) -> void:
+    var previous: Vector2i = pieces[selected]["cell"]
+    _start_move_fx(selected, previous, cell)
     pieces[selected]["cell"] = cell
     if ball_holder == selected:
         ball_cell = cell
@@ -395,17 +503,7 @@ func _check_goal() -> bool:
     var cell: Vector2i = pieces[selected]["cell"]
     var goal_row := 0 if turn == 1 else 9
     if cell.x == goal_row and cell.y >= 2 and cell.y <= 5:
-        scores[turn - 1] += 1
-        if scores[turn - 1] >= 3:
-            winner = turn
-            message = "ПОБЕДА!" if (game_mode == 1 or turn == 1) else "ВЫ ПРОИГРАЛИ"
-            selected = -1
-            game_over = true
-            queue_redraw()
-        else:
-            _reset_board()
-            message = "ГОЛ! %d : %d — ход голубых" % [scores[0], scores[1]]
-            queue_redraw()
+        _award_point(turn, "ГОЛ!")
         return true
     return false
 
@@ -501,9 +599,12 @@ func _bot_turn() -> void:
     selected = best["piece"]
     if best["victim"] >= 0:
         pieces[best["victim"]]["alive"] = false
+        _start_hit_fx(pieces[best["victim"]]["cell"])
         if ball_holder == best["victim"]:
             ball_holder = selected
     _move_selected(best["to"])
+    if _check_elimination():
+        return
     if _check_goal():
         return
     # Keep capturing with the same piece while captures are available.
@@ -511,9 +612,12 @@ func _bot_turn() -> void:
         while not _captures(selected).is_empty():
             var next_capture: Dictionary = _captures(selected)[0]
             pieces[next_capture["victim"]]["alive"] = false
+            _start_hit_fx(pieces[next_capture["victim"]]["cell"])
             if ball_holder == next_capture["victim"]:
                 ball_holder = selected
             _move_selected(next_capture["cell"])
+            if _check_elimination():
+                return
             if _check_goal():
                 return
     _finish_turn()
@@ -596,7 +700,13 @@ func _draw() -> void:
         var team: int = pieces[i]["team"]
         var key: String = BLUE_SKINS[piece_skins[i]] if team == 1 else RED_SKINS[piece_skins[i]]
         var token_side := side * 0.93
-        var token_center: Vector2 = drag_pointer if drag_active and drag_moved and cell == drag_origin else center
+        var token_center: Vector2 = center
+        if fx_piece == i and fx_progress < 1.0 and not drag_active:
+            var eased: float = 1.0 - pow(1.0 - fx_progress, 3.0)
+            token_center = _drag_cell_center(fx_from).lerp(_drag_cell_center(fx_to), eased)
+            token_center.y -= sin(fx_progress * PI) * side * 0.13
+        if drag_active and drag_moved and cell == drag_origin:
+            token_center = drag_pointer
         if not _draw_asset(key, Rect2(token_center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
             _draw_fantasy_token(center, side * 0.37, team, i)
         if ball_holder == i:
@@ -610,6 +720,7 @@ func _draw() -> void:
         if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
             _draw_ghost_pumpkin(pumpkin_center, side * 0.23)
     _draw_drag_hints()
+    _draw_game_fx()
     _draw_bottom_actions()
     if game_over:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))

@@ -28,6 +28,15 @@ var fancy_font: Font
 
 func _process(delta: float) -> void:
     magic_clock += delta
+    if fx_progress < 1.0:
+        fx_progress = minf(1.0, fx_progress + delta * 5.0)
+        queue_redraw()
+    if fx_capture_time > 0.0:
+        fx_capture_time = maxf(0.0, fx_capture_time - delta)
+        queue_redraw()
+    if fx_bounce_time > 0.0:
+        fx_bounce_time = maxf(0.0, fx_bounce_time - delta)
+        queue_redraw()
     if selected.x >= 0 or drag_active: queue_redraw()
     if customization_open:
         flame_time += delta
@@ -146,8 +155,13 @@ func _drag_event(event: InputEvent) -> bool:
             drag_origin = Vector2i(-1, -1)
             if drag_moved:
                 var target: Vector2i = _drag_point_to_cell(point)
-                if _drag_cell_valid(target) and target != old:
+                if _valid_drop(target) and target != old:
                     _tap(target)
+                else:
+                    fx_bounce_cell = old
+                    fx_bounce_start = point
+                    fx_bounce_data = _piece(old).duplicate()
+                    fx_bounce_time = 0.22
             drag_moved = false
             queue_redraw()
         return true
@@ -160,6 +174,17 @@ func _drag_event(event: InputEvent) -> bool:
             drag_pointer = point
             _tap(cell)
             queue_redraw()
+            return true
+    return false
+
+func _valid_drop(cell: Vector2i) -> bool:
+    if selected.x < 0 or not _inside(cell):
+        return false
+    var moves: Array = _captures(selected)
+    if forced.x < 0 and not _must_capture(turn):
+        moves.append_array(_moves(selected))
+    for move in moves:
+        if move["to"] == cell:
             return true
     return false
 
@@ -197,6 +222,69 @@ func _draw_drag_hints() -> void:
         var capture: bool = option["taken"].x >= 0
         _magic_ring(center, side * 0.28, Color("#ff6b30") if capture else Color("#71f9b0"))
 
+
+var fx_source: Vector2i = Vector2i(-1, -1)
+var fx_target: Vector2i = Vector2i(-1, -1)
+var fx_progress: float = 1.0
+var fx_capture: Vector2i = Vector2i(-1, -1)
+var fx_capture_time: float = 0.0
+var fx_piece_data: Dictionary = {}
+var fx_bounce_time: float = 0.0
+var fx_bounce_cell: Vector2i = Vector2i(-1, -1)
+var fx_bounce_start: Vector2 = Vector2.ZERO
+var fx_bounce_data: Dictionary = {}
+var fx_bounce_start: Vector2 = Vector2.ZERO
+var fx_bounce_data: Dictionary = {}
+
+func _start_move_fx(source: Vector2i, target: Vector2i, captured: Vector2i, data: Dictionary) -> void:
+    fx_source = source
+    fx_target = target
+    fx_progress = 0.0
+    fx_piece_data = data.duplicate()
+    if captured.x >= 0:
+        fx_capture = captured
+        fx_capture_time = 0.55
+
+func _draw_game_fx() -> void:
+    var g: Dictionary = _geometry()
+    var side: float = g["side"]
+    var origin: Vector2 = g["origin"]
+    if fx_capture_time > 0.0:
+        var t: float = 1.0 - fx_capture_time / 0.55
+        var c: Vector2 = origin + Vector2(fx_capture.y + 0.5, fx_capture.x + 0.5) * side
+        draw_arc(c, side * (0.17 + 0.43 * t), 0.0, TAU, 40, Color(1.0, 0.4, 0.12, 1.0-t), 3.0)
+        for i in 8:
+            var a: float = TAU * float(i) / 8.0
+            var d: Vector2 = Vector2(cos(a), sin(a))
+            draw_line(c + d * side * 0.1, c + d * side * (0.2 + t * 0.4), Color(1.0, 0.73, 0.2, 1.0-t), 2.0)
+    if fx_bounce_time > 0.0 and fx_bounce_cell.x >= 0:
+        var t: float = 1.0 - fx_bounce_time / 0.22
+        var dest: Vector2 = origin + Vector2(fx_bounce_cell.y + 0.5, fx_bounce_cell.x + 0.5) * side
+        var c: Vector2 = fx_bounce_start.lerp(dest, t)
+        if fx_bounce_data.size() > 0:
+            var team_idx: int = int(fx_bounce_data["team"]) - 1
+            var skin_idx: int = king_skin[team_idx] if bool(fx_bounce_data["king"]) else pawn_skin[team_idx]
+            var key: String = BLUE_SKINS[skin_idx] if team_idx == 0 else RED_SKINS[skin_idx]
+            if textures.has(key):
+                draw_texture_rect(textures[key], Rect2(c - Vector2.ONE * side * 0.44, Vector2.ONE * side * 0.88), false)
+        draw_arc(c, side * (0.25 + t * 0.2), 0.0, TAU, 36, Color(0.45, 0.96, 1.0, 0.8*(1.0-t)), 2.5)
+    if fx_progress < 1.0 and fx_piece_data.size() > 0:
+        var eased: float = 1.0 - pow(1.0 - fx_progress, 3.0)
+        var c1: Vector2 = origin + Vector2(fx_source.y + 0.5, fx_source.x + 0.5) * side
+        var c2: Vector2 = origin + Vector2(fx_target.y + 0.5, fx_target.x + 0.5) * side
+        var center: Vector2 = c1.lerp(c2, eased) - Vector2(0, sin(fx_progress * PI) * side * 0.12)
+        var team_idx: int = int(fx_piece_data["team"]) - 1
+        var skin_idx: int = king_skin[team_idx] if bool(fx_piece_data["king"]) else pawn_skin[team_idx]
+        var key: String = BLUE_SKINS[skin_idx] if team_idx == 0 else RED_SKINS[skin_idx]
+        if textures.has(key):
+            var width: float = side * 0.88
+            draw_texture_rect(textures[key], Rect2(center - Vector2.ONE * width * 0.5, Vector2.ONE * width), false)
+        else:
+            draw_circle(center, side * 0.38, Color("#2aaedc") if team_idx == 0 else Color("#b83f43"))
+        if bool(fx_piece_data["king"]):
+            draw_circle(center + Vector2(0, side * 0.23), side * 0.12, Color("#e5ba4d"))
+            draw_string(ThemeDB.fallback_font, center + Vector2(-side * 0.1, side * 0.28), "Д", HORIZONTAL_ALIGNMENT_LEFT, -1, int(side * 0.19), Color("#22150a"))
+
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
     if ResourceLoader.exists("res://assets/game_font.ttf"):
@@ -217,6 +305,8 @@ func _ready() -> void:
         for j in mini(saved_king.size(), 2): king_skin[j] = int(saved_king[j])
 
 func _new_game() -> void:
+    fx_progress = 1.0
+    fx_capture_time = 0.0
     board.clear()
     for r in N:
         var line: Array = []
@@ -325,6 +415,7 @@ func _tap(p: Vector2i) -> void:
     for move in available:
         if move["to"] != p: continue
         var data: Dictionary = _piece(selected).duplicate()
+        _start_move_fx(selected, p, move["taken"], data)
         board[selected.x][selected.y] = {"team":0,"king":false}
         board[p.x][p.y] = data
         var taken: Vector2i = move["taken"]
@@ -412,6 +503,7 @@ func _draw() -> void:
                 _magic_ring(at + Vector2.ONE * s * 0.5, s * 0.45, Color("#5eeeff"), true)
             var data: Dictionary = _piece(p)
             if data["team"] == 0: continue
+            if fx_progress < 1.0 and p == fx_target: continue
             var center := at+Vector2.ONE*s*0.5
             var team_idx: int = int(data["team"]) - 1
             var skin_idx: int = king_skin[team_idx] if data["king"] else pawn_skin[team_idx]
@@ -437,6 +529,7 @@ func _draw() -> void:
         draw_string(font,o+Vector2(-19,(r+0.58)*s),label,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#b9e5e8"))
         draw_string(font,o+Vector2(8*s+7,(r+0.58)*s),label,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#b9e5e8"))
     _draw_drag_hints()
+    _draw_game_fx()
     _draw_bottom_actions()
     if customization_open:
         _draw_customization(font)
@@ -568,6 +661,7 @@ func _bot_move() -> void:
     var dest: Vector2i = best["to"]
     var captured: Vector2i = best["taken"]
     var piece_data: Dictionary = _piece(source).duplicate()
+    _start_move_fx(source, dest, captured, piece_data)
     board[source.x][source.y] = {"team": 0, "king": false}
     board[dest.x][dest.y] = piece_data
     if captured.x >= 0:
@@ -608,6 +702,7 @@ func _bot_continue() -> void:
     var dest: Vector2i = move["to"]
     var victim: Vector2i = move["taken"]
     var data: Dictionary = _piece(forced).duplicate()
+    _start_move_fx(forced, dest, victim, data)
     board[forced.x][forced.y] = {"team": 0, "king": false}
     board[dest.x][dest.y] = data
     board[victim.x][victim.y] = {"team": 0, "king": false}
