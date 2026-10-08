@@ -21,7 +21,7 @@ func _ready():
     _reset_rally()
 
 func _build_ui():
-    var bg=ColorRect.new(); bg.color=Color("07110d"); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); add_child(bg)
+    var bg=ColorRect.new(); bg.color=Color("07110d"); bg.mouse_filter=Control.MOUSE_FILTER_IGNORE;.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); add_child(bg)
     var root=VBoxContainer.new(); root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.add_theme_constant_override("separation",14); root.offset_left=18;root.offset_right=-18;root.offset_top=28;root.offset_bottom=-24; add_child(root)
     var title=Label.new(); title.text="MONSTER BALL 3.0 · GODOT"; title.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size",28); root.add_child(title)
     score_label=Label.new(); score_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER; score_label.add_theme_font_size_override("font_size",22); root.add_child(score_label)
