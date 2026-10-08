@@ -33,6 +33,8 @@ var fancy_font: Font
 # Halloween Sound Edition: shared per-scene sound system. No autoload required.
 var sound_library: Dictionary = {}
 var arena_music: AudioStreamPlayer
+var crowd_ambience: AudioStreamPlayer
+var game_audio_unlocked: bool = false
 
 func _setup_game_audio() -> void:
     for sound_name in ["stone_move", "king_move", "capture", "pass", "goal", "crowd", "victory", "arena_ambience"]:
@@ -49,8 +51,39 @@ func _setup_game_audio() -> void:
             wav_ambience.loop_mode = AudioStreamWAV.LOOP_FORWARD
         arena_music.stream = ambience
         arena_music.volume_db = linear_to_db(maxf(0.001, float(get_tree().root.get_meta("mb_vol_music", 0.55)) * 0.23))
-        if not bool(get_tree().root.get_meta("mb_muted", false)):
+        if not bool(get_tree().root.get_meta("mb_muted", false)) and float(get_tree().root.get_meta("mb_vol_music", 0.55)) > 0.005:
             arena_music.play()
+
+    # Continuous spectator murmur, independent of short goal celebrations.
+    # Duplicate the stream: the ordinary "crowd" effect must NOT loop forever.
+    crowd_ambience = AudioStreamPlayer.new()
+    crowd_ambience.name = "HalloweenCrowdLoop"
+    add_child(crowd_ambience)
+    if sound_library.has("crowd"):
+        var crowd_stream: AudioStreamWAV = sound_library["crowd"] as AudioStreamWAV
+        if crowd_stream != null:
+            var looping_crowd: AudioStreamWAV = crowd_stream.duplicate() as AudioStreamWAV
+            looping_crowd.loop_mode = AudioStreamWAV.LOOP_FORWARD
+            crowd_ambience.stream = looping_crowd
+        else:
+            crowd_ambience.stream = sound_library["crowd"]
+        var crowd_volume: float = float(get_tree().root.get_meta("mb_vol_crowd", 0.65))
+        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * 0.70))
+        if not bool(get_tree().root.get_meta("mb_muted", false)) and crowd_volume > 0.005:
+            crowd_ambience.play()
+
+# Browser audio can report "playing" before the first iOS gesture.
+# Restart ambient tracks once, directly on the first touch or click.
+func _unlock_game_audio() -> void:
+    if game_audio_unlocked:
+        return
+    game_audio_unlocked = true
+    if bool(get_tree().root.get_meta("mb_muted", false)):
+        return
+    for player in [arena_music, crowd_ambience]:
+        if player != null and player.stream != null:
+            player.stop()
+            player.play()
 
 func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     if not sound_library.has(sound_name) or bool(get_tree().root.get_meta("mb_muted", false)):
@@ -882,6 +915,8 @@ func _tap(p: Vector2i) -> void:
     queue_redraw()
 
 func _gui_input(event: InputEvent) -> void:
+    if (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
+        _unlock_game_audio()
     if _drag_event(event):
         accept_event()
         return

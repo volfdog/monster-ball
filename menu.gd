@@ -9,6 +9,7 @@ var panel: VBoxContainer
 # Original Halloween melody, controlled from the title screen.
 var menu_music: AudioStreamPlayer
 var menu_click_stream: AudioStream
+var menu_music_unlocked: bool = false
 const AUDIO_KEYS := ["mb_vol_music", "mb_vol_effects", "mb_vol_crowd", "mb_muted"]
 
 func _read_audio_settings() -> void:
@@ -50,8 +51,24 @@ func _update_menu_audio() -> void:
     elif not menu_music.playing:
         menu_music.play()
 
+# A user gesture is needed to release web audio on iPhone/Safari.
+# Stop/restart even if Godot reported "playing" while WebAudio was suspended.
+func _unlock_menu_music() -> void:
+    if menu_music_unlocked:
+        return
+    menu_music_unlocked = true
+    _update_menu_audio()
+    if menu_music != null and menu_music.stream != null and not bool(get_tree().root.get_meta("mb_muted", false)) and float(get_tree().root.get_meta("mb_vol_music", 0.55)) > 0.005:
+        menu_music.stop()
+        menu_music.play()
+
+func _input(event: InputEvent) -> void:
+    if (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
+        _unlock_menu_music()
+
 func _play_menu_click() -> void:
-    _update_menu_audio() # iOS browsers often unlock sound on the first tap.
+    _unlock_menu_music()
+    _update_menu_audio()
     if menu_click_stream == null or bool(get_tree().root.get_meta("mb_muted", false)):
         return
     var volume: float = float(get_tree().root.get_meta("mb_vol_effects", 0.78))
