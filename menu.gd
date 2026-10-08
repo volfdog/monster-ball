@@ -1,6 +1,7 @@
 extends Control
 
 var section: String = ""
+var choose_difficulty: bool = false
 var backdrop: Texture2D
 var panel: VBoxContainer
 
@@ -37,16 +38,21 @@ func _build() -> void:
     panel.add_theme_constant_override("separation", 12)
     add_child(panel)
     var heading := Label.new()
-    heading.text = "ДОБРО ПОЖАЛОВАТЬ!" if section == "" else ("ШАШКИ" if section == "checkers" else "ФУТБОЛ")
+    heading.text = "ВЫБЕРИ СЛОЖНОСТЬ" if choose_difficulty else ("ДОБРО ПОЖАЛОВАТЬ!" if section == "" else ("ШАШКИ" if section == "checkers" else "ФУТБОЛ"))
     heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     heading.add_theme_font_size_override("font_size", 27)
     heading.add_theme_color_override("font_color", Color("#f5dca6"))
     panel.add_child(heading)
-    if section == "":
+    if choose_difficulty:
+        _button("НОВИЧОК", func(): _launch(0, false, 0))
+        _button("ОПЫТНЫЙ", func(): _launch(0, false, 1))
+        _button("ЛЕГЕНДА", func(): _launch(0, false, 2))
+        _button("← НАЗАД", func(): choose_difficulty = false; _build())
+    elif section == "":
         _button("♟  ШАШКИ", func(): section = "checkers"; _build())
         _button("⚽  ФУТБОЛ", func(): section = "football"; _build())
     else:
-        _button("ИГРА С БОТОМ", func(): _launch(0, false))
+        _button("ИГРА С БОТОМ", func(): choose_difficulty = true; _build())
         _button("ИГРА С ДРУГОМ", func(): _launch(1, false))
         _button("КОСТЮМИЗАЦИЯ", func(): _launch(0, true))
         _button("← НАЗАД", func(): section = ""; _build())
@@ -66,7 +72,8 @@ func _button(label_text: String, action: Callable) -> void:
     b.pressed.connect(action)
     panel.add_child(b)
 
-func _launch(mode: int, customize: bool) -> void:
+func _launch(mode: int, customize: bool, difficulty: int = 1) -> void:
+    get_tree().root.set_meta("mb_bot_difficulty", difficulty)
     get_tree().root.set_meta("mb_mode", mode)
     get_tree().root.set_meta("mb_customize", customize)
     var path := "res://checkers.tscn" if section == "checkers" else "res://football.tscn"

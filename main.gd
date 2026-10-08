@@ -14,6 +14,7 @@ var selected := -1
 var scores := [0, 0]
 var message := "Ход голубых"
 var game_mode := 0 # 0 = bot, 1 = two players
+var bot_difficulty: int = 1
 var game_over := false
 var bot_pending := false
 var winner := 0
@@ -41,75 +42,77 @@ func _draw_asset(key: String, rect: Rect2) -> bool:
     draw_texture_rect(fantasy_textures[key], rect, false)
     return true
 
-
 var pending_skin: int = -1
-var flame_clock: float = 0.0
-var skin_font: Font
+var flame_time: float = 0.0
+var fancy_font: Font
 
 func _process(delta: float) -> void:
     if customization_open:
-        flame_clock += delta
+        flame_time += delta
         queue_redraw()
 
-func _skin_font() -> Font:
-    return skin_font if skin_font != null else ThemeDB.fallback_font
+func _ui_font() -> Font:
+    return fancy_font if fancy_font != null else ThemeDB.fallback_font
 
-func _flame_border(rect: Rect2, active: bool) -> void:
+func _flame_frame(rect: Rect2, active: bool) -> void:
     if not active:
-        draw_rect(rect, Color("#526477"), false, 2.0)
+        draw_rect(rect, Color("#617589"), false, 2.0)
         return
-    var pulse: float = 0.5 + 0.5 * sin(flame_clock * 4.0)
-    draw_rect(rect.grow(4.0), Color(1.0, 0.26, 0.04, 0.15 + 0.2 * pulse), false, 6.0)
-    draw_rect(rect, Color("#ffb84b"), false, 3.0)
-    for k in 16:
-        var t: float = fposmod(float(k) / 16.0 + flame_clock * 0.19, 1.0)
-        var d: float = t * (rect.size.x + rect.size.y) * 2.0
-        var v: Vector2 = rect.position
-        if d < rect.size.x:
-            v.x += d
-        elif d < rect.size.x + rect.size.y:
-            v += Vector2(rect.size.x, d - rect.size.x)
-        elif d < 2.0 * rect.size.x + rect.size.y:
-            v += Vector2(2.0 * rect.size.x + rect.size.y - d, rect.size.y)
+    var pulse: float = 0.5 + 0.5 * sin(flame_time * 4.5)
+    draw_rect(rect.grow(5.0), Color("#ef5720", 0.18 + pulse * 0.20), false, 6.0)
+    draw_rect(rect.grow(2.0), Color("#ffb84b"), false, 3.0)
+    for k in 14:
+        var t: float = fmod(float(k) / 14.0 + flame_time * 0.24, 1.0)
+        var perimeter: float = 2.0 * (rect.size.x + rect.size.y)
+        var dist: float = t * perimeter
+        var p: Vector2 = rect.position
+        if dist < rect.size.x:
+            p += Vector2(dist, 0)
+        elif dist < rect.size.x + rect.size.y:
+            p += Vector2(rect.size.x, dist - rect.size.x)
+        elif dist < rect.size.x * 2.0 + rect.size.y:
+            p += Vector2(rect.size.x - (dist - rect.size.x - rect.size.y), rect.size.y)
         else:
-            v += Vector2(0.0, 2.0 * (rect.size.x + rect.size.y) - d)
-        draw_circle(v, 2.0 + 1.6 * pulse, Color("#ff8526", 0.85))
+            p += Vector2(0, rect.size.y - (dist - rect.size.x * 2.0 - rect.size.y))
+        draw_circle(p, 2.0 + pulse * 1.5, Color("#ff9c2b", 0.65))
 
-func _draw_skin_confirm() -> void:
+func _confirmation_ui() -> void:
     if pending_skin < 0:
         return
-    var font: Font = _skin_font()
-    var w: float = minf(size.x - 24.0, 410.0)
-    var r := Rect2(Vector2((size.x - w) * 0.5, (size.y - 210.0) * 0.5), Vector2(w, 210.0))
-    draw_rect(Rect2(Vector2.ZERO, size), Color("#050711", 0.85))
-    draw_rect(r, Color("#1d1724"))
-    _flame_border(r, true)
-    draw_string(font, r.position + Vector2(18, 48), "СМЕНА ОБЛИКА", HORIZONTAL_ALIGNMENT_LEFT, w - 36, 22, Color("#ffd18b"))
-    draw_string(font, r.position + Vector2(18, 90), "Вы уверены?", HORIZONTAL_ALIGNMENT_LEFT, w - 36, 20, Color.WHITE)
-    var half: float = (w - 42.0) * 0.5
-    var y: float = r.end.y - 64.0
-    draw_rect(Rect2(r.position.x + 14, y, half, 46), Color("#3b3d4b"))
-    draw_rect(Rect2(r.position.x + 28 + half, y, half, 46), Color("#914e24"))
-    draw_string(font, Vector2(r.position.x + 23, y + 30), "ОТМЕНА", HORIZONTAL_ALIGNMENT_LEFT, half - 12, 15, Color.WHITE)
-    draw_string(font, Vector2(r.position.x + 37 + half, y + 30), "ПОДТВЕРДИТЬ", HORIZONTAL_ALIGNMENT_LEFT, half - 12, 14, Color.WHITE)
+    var font: Font = _ui_font()
+    var w: float = minf(size.x - 24.0, 430.0)
+    var h: float = 210.0
+    var r := Rect2((size.x - w) * 0.5, (size.y - h) * 0.5, w, h)
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#050810", 0.78))
+    draw_rect(r, Color("#1a1724"))
+    _flame_frame(r, true)
+    draw_string(font, r.position + Vector2(20, 48), "СМЕНА ОБЛИКА", HORIZONTAL_ALIGNMENT_LEFT, w - 40, 23, Color("#ffcf83"))
+    draw_string(font, r.position + Vector2(20, 89), "Вы уверены?", HORIZONTAL_ALIGNMENT_LEFT, w - 40, 20, Color.WHITE)
+    var by: float = r.end.y - 65.0
+    draw_rect(Rect2(r.position.x + 14, by, (w - 38) * 0.5, 45), Color("#444351"))
+    draw_rect(Rect2(r.position.x + 24 + (w - 38) * 0.5, by, (w - 38) * 0.5, 45), Color("#8e4a20"))
+    draw_string(font, Vector2(r.position.x + 27, by + 29), "ОТМЕНА", HORIZONTAL_ALIGNMENT_LEFT, (w - 38) * 0.5 - 16, 15, Color.WHITE)
+    draw_string(font, Vector2(r.position.x + 37 + (w - 38) * 0.5, by + 29), "ПОДТВЕРДИТЬ", HORIZONTAL_ALIGNMENT_LEFT, (w - 38) * 0.5 - 16, 14, Color.WHITE)
 
-func _confirm_skin_tap(pos: Vector2) -> void:
-    var w: float = minf(size.x - 24.0, 410.0)
-    var r := Rect2(Vector2((size.x - w) * 0.5, (size.y - 210.0) * 0.5), Vector2(w, 210.0))
-    var y: float = r.end.y - 64.0
-    if pos.y >= y and pos.y <= y + 46.0 and pos.x >= r.position.x and pos.x <= r.end.x:
-        if pos.x > size.x * 0.5:
-            _apply_skin_choice()
-        pending_skin = -1
+func _confirmation_tap(point: Vector2) -> void:
+    var w: float = minf(size.x - 24.0, 430.0)
+    var h: float = 210.0
+    var r := Rect2((size.x - w) * 0.5, (size.y - h) * 0.5, w, h)
+    var by: float = r.end.y - 65.0
+    if point.y >= by and point.y <= by + 45.0 and point.x > size.x * 0.5:
+        piece_skins[(customization_team - 1) * 4 + customization_slot] = pending_skin
+        get_tree().root.set_meta("mb_football_skins", piece_skins.duplicate())
+    pending_skin = -1
     queue_redraw()
 
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
     if ResourceLoader.exists("res://assets/game_font.ttf"):
-        skin_font = load("res://assets/game_font.ttf")
+        fancy_font = load("res://assets/game_font.ttf")
     _load_fantasy_assets()
     _reset_board()
     game_mode = int(get_tree().root.get_meta("mb_mode", 0))
+    bot_difficulty = clampi(int(get_tree().root.get_meta("mb_bot_difficulty", 1)), 0, 2)
     customization_open = bool(get_tree().root.get_meta("mb_customize", false))
     if get_tree().root.has_meta("mb_football_skins"):
         var saved: Array = get_tree().root.get_meta("mb_football_skins")
@@ -182,34 +185,14 @@ func _gui_input(event: InputEvent) -> void:
     accept_event()
     if customization_open:
         if pending_skin >= 0:
-            _confirm_skin_tap(point)
+            _confirmation_tap(point)
             return
         _customization_tap(point)
         return
-    if point.y < 38.0 and point.x > size.x * 0.64:
-        get_tree().change_scene_to_file("res://main.tscn")
-        return
-    # The two menu buttons share a row: decide by X before opening either.
-    if point.y >= 74.0 and point.y <= 116.0:
-        if point.x >= size.x * 0.60:
-            get_tree().change_scene_to_file("res://checkers.tscn")
-        else:
-            customization_open = true
-            customization_team = 1
-            customization_slot = 0
-            queue_redraw()
-        return
-    # Tap the mode tabs at the top, or the restart button at the bottom.
-    if point.y < 70.0:
-        if point.x < size.x * 0.5:
-            game_mode = 0
-        else:
-            game_mode = 1
-        scores = [0, 0]
-        _reset_board()
-        queue_redraw()
-        return
-    if point.y > size.y - 57.0:
+    if point.y > size.y - 82.0:
+        if point.x >= size.x * 0.5:
+            _go_to_main_menu()
+            return
         scores = [0, 0]
         _reset_board()
         return
@@ -223,10 +206,6 @@ func _gui_input(event: InputEvent) -> void:
     var cell := Vector2i(row, col)
     if _inside(cell):
         _tap(cell)
-
-func _apply_skin_choice() -> void:
-    piece_skins[(customization_team - 1) * 4 + customization_slot] = pending_skin
-    get_tree().root.set_meta("mb_football_skins", piece_skins.duplicate())
 
 func _customization_tap(point: Vector2) -> void:
     if point.y < 130.0 or point.y > size.y - 65.0:
@@ -327,6 +306,33 @@ func _schedule_bot() -> void:
     bot_pending = true
     _bot_turn.call_deferred()
 
+func _football_bot_score(index: int, target: Vector2i, victim: int) -> int:
+    var value: int = 0
+    if ball_holder == index:
+        value += target.x * 9
+        if target.x == 9 and target.y >= 2 and target.y <= 5:
+            value += 500
+    elif ball_holder == -1:
+        value -= (absi(target.x - ball_cell.x) + absi(target.y - ball_cell.y)) * 8
+        if target == ball_cell:
+            value += 170
+    else:
+        var holder: int = ball_holder
+        if holder >= 0 and pieces[holder]["alive"]:
+            var enemy: Vector2i = pieces[holder]["cell"]
+            value -= (absi(target.x - enemy.x) + absi(target.y - enemy.y)) * 5
+    if victim >= 0:
+        value += 65
+    for j in pieces.size():
+        if not pieces[j]["alive"] or pieces[j]["team"] != 1 or j == victim:
+            continue
+        var enemy_cell: Vector2i = pieces[j]["cell"]
+        if absi(enemy_cell.x - target.x) == 1 and absi(enemy_cell.y - target.y) == 1:
+            var escape: Vector2i = target + (target - enemy_cell)
+            if _inside(escape) and _piece_at(escape) == -1:
+                value -= 55
+    return value
+
 func _bot_turn() -> void:
     if not is_inside_tree():
         return
@@ -341,7 +347,10 @@ func _bot_turn() -> void:
             continue
         var from: Vector2i = pieces[i]["cell"]
         for capture in _captures(i):
-            candidates.append({"piece": i, "to": capture["cell"], "victim": capture["victim"], "weight": 100})
+            var weight: int = 100 if bot_difficulty > 0 else randi_range(0, 60)
+            if bot_difficulty == 2:
+                weight += _football_bot_score(i, capture["cell"], capture["victim"])
+            candidates.append({"piece": i, "to": capture["cell"], "victim": capture["victim"], "weight": weight})
         if must_capture:
             continue
         for dr in [-1, 1]:
@@ -358,6 +367,12 @@ func _bot_turn() -> void:
                     weight += 20 - (abs(target.x - ball_cell.x) + abs(target.y - ball_cell.y)) * 3
                 elif dr == 1:
                     weight += 3
+                if bot_difficulty == 0:
+                    weight = randi_range(0, 70)
+                elif bot_difficulty == 1:
+                    weight += randi_range(-10, 10)
+                else:
+                    weight += _football_bot_score(i, target, -1)
                 candidates.append({"piece": i, "to": target, "victim": -1, "weight": weight})
     if candidates.is_empty():
         message = "Бот не может сделать ход"
@@ -393,18 +408,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#14111b"))
     var font: Font = ThemeDB.fallback_font
     draw_string(font, Vector2(18, 27), "MONSTER BALL    %d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, -1, 21, Color.WHITE)
-    draw_rect(Rect2(size.x * 0.67, 1, size.x * 0.32, 35), Color("#31445c"))
-    draw_string(font, Vector2(size.x * 0.69, 26), "МЕНЮ ←", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
-    var tab_width := size.x / 2.0
-    draw_rect(Rect2(0, 38, tab_width, 32), Color("#347d80") if game_mode == 0 else Color("#37303d"))
-    draw_rect(Rect2(tab_width, 38, tab_width, 32), Color("#347d80") if game_mode == 1 else Color("#37303d"))
-    draw_string(font, Vector2(12, 61), "С БОТОМ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
-    draw_string(font, Vector2(tab_width + 12, 61), "НА ДВОИХ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
-    draw_rect(Rect2(0, 74, size.x, 42), Color("#253a4b"))
-    draw_string(font, Vector2(18, 101), "ГЕРОИ / ВНЕШНОСТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#c7efff"))
-    draw_string(font, Vector2(18, 137), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
-    draw_rect(Rect2(size.x * 0.60, 76, size.x * 0.38, 40), Color("#347d80"))
-    draw_string(font, Vector2(size.x * 0.65, 103), "ШАШКИ  ›", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
+    draw_string(font, Vector2(18, 68), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 16, Color("#d9f6f9"))
     # Fantasy stone board. Geometry and input coordinates stay unchanged.
     var board_size := Vector2(COLS * side, ROWS * side)
     draw_rect(Rect2(offset - Vector2(6, 6), board_size + Vector2(12, 12)), Color("#0b1925"))
@@ -487,7 +491,7 @@ func _draw() -> void:
         var pumpkin_size := side * 0.90
         if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
             _draw_ghost_pumpkin(pumpkin_center, side * 0.23)
-    draw_string(font, Vector2(18, size.y - 24), "СБРОС / НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#dddddd"))
+    _draw_bottom_actions()
     if game_over:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
         draw_rect(panel, Color("#15111eef"))
@@ -500,32 +504,36 @@ func _draw() -> void:
 
 
     if customization_open:
-        font = _skin_font()
-        draw_rect(Rect2(Vector2.ZERO, size), Color("#070d18", 0.97))
-        draw_string(font, Vector2(16, 52), "ГЕРОИ — ВЫБОР ВНЕШНОСТИ", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color.WHITE)
-        draw_string(font, Vector2(16, 103), "Нажми здесь, чтобы закрыть", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#a5d4dc"))
-        var half: float = size.x / 2.0
-        draw_rect(Rect2(0, 140, half, 39), Color("#236d83") if customization_team == 1 else Color("#343743"))
-        draw_rect(Rect2(half, 140, half, 39), Color("#923d50") if customization_team == 2 else Color("#343743"))
-        draw_string(font, Vector2(10, 166), "СИНИЕ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
-        draw_string(font, Vector2(half + 10, 166), "КРАСНЫЕ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
-        var skins: Array = BLUE_SKINS if customization_team == 1 else RED_SKINS
-        for slot in 4:
-            var x: float = float(slot) * size.x / 4.0
-            var w: float = size.x / 4.0
-            draw_rect(Rect2(x + 2, 192, w - 4, 46), Color("#38687a") if slot == customization_slot else Color("#303441"))
-            draw_string(font, Vector2(x + 10, 222), "Фишка %d" % (slot + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color.WHITE)
-        for skin_idx in 4:
-            var w: float = size.x / 4.0
-            var x: float = skin_idx * w
-            var rect := Rect2(x + 4, 265, w - 8, w - 8)
-            var chosen: bool = piece_skins[(customization_team - 1) * 4 + customization_slot] == skin_idx
-            _flame_border(rect.grow(3), chosen)
-            _draw_asset(skins[skin_idx], rect)
-            draw_string(font, Vector2(x + 8, 286 + w), "ОБЛИК %d" % (skin_idx + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
-        draw_string(font, Vector2(14, 323 + size.x / 4.0), "Выбери фишку, затем облик", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
-        draw_string(font, Vector2(14, size.y - 26), "ЗАКРЫТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#a5d4dc"))
-        _draw_skin_confirm()
+        _draw_customization_panel()
+        _confirmation_ui()
+
+func _draw_customization_panel() -> void:
+    var font: Font = _ui_font()
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#080e1a", 0.97))
+    draw_string(font, Vector2(14, 46), "ГЕРОИ И ОБЛИКИ", HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 22, Color("#f8d29a"))
+    draw_string(font, Vector2(14, 101), "Нажми здесь, чтобы закрыть", HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 15, Color("#b6d9df"))
+    var half: float = size.x / 2.0
+    draw_rect(Rect2(0, 140, half, 39), Color("#236d83") if customization_team == 1 else Color("#343743"))
+    draw_rect(Rect2(half, 140, half, 39), Color("#923d50") if customization_team == 2 else Color("#343743"))
+    draw_string(font, Vector2(10, 166), "СИНИЕ", HORIZONTAL_ALIGNMENT_LEFT, half - 15, 16, Color.WHITE)
+    draw_string(font, Vector2(half + 10, 166), "КРАСНЫЕ", HORIZONTAL_ALIGNMENT_LEFT, half - 15, 16, Color.WHITE)
+    var skins: Array = BLUE_SKINS if customization_team == 1 else RED_SKINS
+    for slot in 4:
+        var x: float = float(slot) * size.x / 4.0
+        var w: float = size.x / 4.0
+        draw_rect(Rect2(x + 2, 192, w - 4, 46), Color("#38687a") if slot == customization_slot else Color("#303441"))
+        draw_string(font, Vector2(x + 7, 222), "Фишка %d" % (slot + 1), HORIZONTAL_ALIGNMENT_LEFT, w - 10, 13, Color.WHITE)
+    for skin_idx in 4:
+        var w: float = size.x / 4.0
+        var x: float = float(skin_idx) * w
+        var rect := Rect2(x + 7, 267, w - 14, w - 14)
+        var chosen: bool = piece_skins[(customization_team - 1) * 4 + customization_slot] == skin_idx
+        _flame_frame(rect.grow(2), chosen)
+        _draw_asset(skins[skin_idx], rect)
+        draw_string(font, Vector2(x + 10, 284 + w), "ОБЛИК %d" % (skin_idx + 1), HORIZONTAL_ALIGNMENT_LEFT, w - 14, 12, Color("#ffdab0"))
+    var caption_y: float = 315.0 + size.x / 4.0
+    draw_string(font, Vector2(14, caption_y), "Выбери фишку, затем облик", HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 16, Color("#d4e6ed"))
+    draw_string(font, Vector2(14, size.y - 26), "ЗАКРЫТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#a5d4dc"))
 
 
 # Beveled metal rim, glassy core and engraved fantasy insignia.
@@ -576,3 +584,18 @@ func _draw_ghost_pumpkin(center: Vector2, radius: float) -> void:
     draw_colored_polygon(PackedVector2Array([center + Vector2(radius * 0.63, -radius * 0.14), center + Vector2(radius * 0.10, -radius * 0.14), center + Vector2(radius * 0.31, radius * 0.23)]), Color("#102f28"))
     draw_colored_polygon(PackedVector2Array([center + Vector2(-radius * 0.55, radius * 0.38), center + Vector2(0, radius * 0.67), center + Vector2(radius * 0.55, radius * 0.38), center + Vector2(radius * 0.25, radius * 0.30), center + Vector2(0, radius * 0.45), center + Vector2(-radius * 0.25, radius * 0.30)]), Color("#14372b"))
     draw_arc(center, radius * 1.02, 0.0, TAU, 32, Color("#a7ffe0", 0.8), max(1.0, radius * 0.08))
+
+func _go_to_main_menu() -> void:
+    get_tree().root.set_meta("mb_customize", false)
+    get_tree().change_scene_to_file("res://main.tscn")
+
+func _draw_bottom_actions() -> void:
+    var font: Font = ThemeDB.fallback_font
+    var y: float = size.y - 74.0
+    var w: float = size.x * 0.5
+    draw_rect(Rect2(4, y, w - 8, 61), Color("#273d51"))
+    draw_rect(Rect2(w + 4, y, w - 8, 61), Color("#684026"))
+    draw_rect(Rect2(4, y, w - 8, 61), Color("#83d5e4"), false, 2.0)
+    draw_rect(Rect2(w + 4, y, w - 8, 61), Color("#ffc17a"), false, 2.0)
+    draw_string(font, Vector2(13, y + 37), "НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_LEFT, w - 17, 15, Color.WHITE)
+    draw_string(font, Vector2(w + 12, y + 37), "ГЛАВНОЕ МЕНЮ", HORIZONTAL_ALIGNMENT_LEFT, w - 18, 14, Color.WHITE)
