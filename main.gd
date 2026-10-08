@@ -41,7 +41,7 @@ func _reset_board() -> void:
 func _geometry() -> Dictionary:
     var top_margin := 120.0
     var bottom_margin := 85.0
-    var side_margin := 27.0
+    var side_margin := 29.0
     var usable := Vector2(max(1.0, size.x - 2.0 * side_margin), max(1.0, size.y - top_margin - bottom_margin))
     var cell_size: float = floor(min(usable.x / COLS, usable.y / ROWS))
     var offset := Vector2(floor((size.x - COLS * cell_size) / 2.0), floor(top_margin + (usable.y - ROWS * cell_size) / 2.0))
@@ -269,12 +269,21 @@ func _draw() -> void:
     draw_string(font, Vector2(12, 61), "С БОТОМ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(tab_width + 12, 61), "НА ДВОИХ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(18, 95), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
-    # Board: exact square cells, dark at bottom-right. Coordinates outside the board.
-    draw_rect(Rect2(offset - Vector2(2, 2), Vector2(COLS * side + 4, ROWS * side + 4)), Color("#b7a6c8"))
+    # Exactly square cells. Thin grid lines keep every row and column aligned.
+    var board_size := Vector2(COLS * side, ROWS * side)
+    draw_rect(Rect2(offset, board_size), Color("#30243f"))
     for row in ROWS:
         for col in COLS:
-            var rect := Rect2(offset + Vector2(col, row) * side, Vector2.ONE * side)
+            var rect := Rect2(offset + Vector2(col, row) * side, Vector2(side, side))
             draw_rect(rect, Color("#30243f") if (row + col) % 2 == 0 else Color("#665174"))
+    var grid_color := Color("#201a2b", 0.42)
+    for col in range(COLS + 1):
+        var x := offset.x + col * side
+        draw_line(Vector2(x, offset.y), Vector2(x, offset.y + board_size.y), grid_color, 1.0)
+    for row in range(ROWS + 1):
+        var y := offset.y + row * side
+        draw_line(Vector2(offset.x, y), Vector2(offset.x + board_size.x, y), grid_color, 1.0)
+    draw_rect(Rect2(offset, board_size), Color("#17121e"), false, 3.0)
     for col in COLS:
         var letter := char(65 + col)
         var x := offset.x + (col + 0.5) * side - 5.0
@@ -285,11 +294,14 @@ func _draw() -> void:
         var y := offset.y + (row + 0.5) * side + 5.0
         draw_string(font, Vector2(offset.x - 23, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
         draw_string(font, Vector2(offset.x + COLS * side + 7, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
-    # Goal lines: central four cells on each end.
-    for goal_row in [0, ROWS - 1]:
-        var goal_start := offset + Vector2(2 * side, goal_row * side)
-        var goal_end := goal_start + Vector2(4 * side, 0)
-        draw_line(goal_start, goal_end, Color("#e6ca70"), 4.0)
+    # Goals are BEHIND the starting pieces, on the outer edges of the board.
+    # Red goal at the top; blue goal at the bottom.
+    var goal_left := offset.x + 2.0 * side
+    var goal_right := offset.x + 6.0 * side
+    for goal_y in [offset.y - 2.0, offset.y + ROWS * side + 2.0]:
+        draw_line(Vector2(goal_left, goal_y), Vector2(goal_right, goal_y), Color("#f6cf65"), 5.0)
+        draw_line(Vector2(goal_left, goal_y - 6.0), Vector2(goal_left, goal_y + 6.0), Color("#f6cf65"), 3.0)
+        draw_line(Vector2(goal_right, goal_y - 6.0), Vector2(goal_right, goal_y + 6.0), Color("#f6cf65"), 3.0)
 
     for i in pieces.size():
         if not pieces[i]["alive"]:
