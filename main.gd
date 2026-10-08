@@ -140,6 +140,7 @@ func _halloween_pumpkin(center: Vector2, radius: float) -> void:
     draw_line(center + Vector2(-radius * 0.58,radius * 0.27), center + Vector2(radius * 0.56,radius * 0.30), ink, maxf(1.5, radius * 0.18))
     draw_circle(center + Vector2(radius * 0.50,-radius * 0.68), radius * 0.21, Color("#ffbb50", 0.45))
 
+
 # Halloween decorations are vector-drawn so the GitHub upload needs only two scripts.
 func _halloween_ghost(center: Vector2, radius: float, seed: float) -> void:
     var wobble: float = sin(magic_clock * 1.5 + seed) * radius * 0.16
@@ -169,68 +170,238 @@ func _halloween_grave(center: Vector2, scale: float) -> void:
     draw_line(Vector2(center.x, r.position.y - w * 0.27), Vector2(center.x, r.position.y + w * 0.28), Color("#232b3c"), 2.0)
     draw_line(Vector2(center.x - w * 0.23, r.position.y), Vector2(center.x + w * 0.23, r.position.y), Color("#232b3c"), 2.0)
 
+func _halloween_spectator_shadow(center: Vector2, scale: float) -> void:
+    draw_colored_polygon(PackedVector2Array([
+        center + Vector2(-18.0 * scale, 0),
+        center + Vector2(-10.0 * scale, 5.0 * scale),
+        center + Vector2(10.0 * scale, 5.0 * scale),
+        center + Vector2(18.0 * scale, 0),
+        center + Vector2(10.0 * scale, -4.0 * scale),
+        center + Vector2(-10.0 * scale, -4.0 * scale)
+    ]), Color("#04050b", 0.40))
+
+func _halloween_zombie(center: Vector2, scale: float, seed: float) -> void:
+    var bob: float = sin(magic_clock * 1.7 + seed) * 2.2 * scale
+    var p: Vector2 = center + Vector2(0, bob)
+    _halloween_spectator_shadow(p + Vector2(0, 22.0 * scale), scale)
+    draw_rect(Rect2(p + Vector2(-10.0 * scale, -5.0 * scale), Vector2(20.0 * scale, 25.0 * scale)), Color("#3f4761"))
+    draw_colored_polygon(PackedVector2Array([
+        p + Vector2(-11.0 * scale, 2.0 * scale),
+        p + Vector2(-3.0 * scale, -8.0 * scale),
+        p + Vector2(2.0 * scale, 1.0 * scale),
+        p + Vector2(10.0 * scale, -8.0 * scale),
+        p + Vector2(13.0 * scale, 1.0 * scale),
+        p + Vector2(10.0 * scale, 22.0 * scale),
+        p + Vector2(-10.0 * scale, 22.0 * scale)
+    ]), Color("#5b6b7d"))
+    draw_line(p + Vector2(-8.0 * scale, 4.0 * scale), p + Vector2(-18.0 * scale, 12.0 * scale), Color("#79b16d"), 4.0 * scale)
+    draw_line(p + Vector2(8.0 * scale, 4.0 * scale), p + Vector2(18.0 * scale, 10.0 * scale), Color("#79b16d"), 4.0 * scale)
+    draw_line(p + Vector2(-4.0 * scale, 21.0 * scale), p + Vector2(-7.0 * scale, 32.0 * scale), Color("#4e5e69"), 4.0 * scale)
+    draw_line(p + Vector2(4.0 * scale, 21.0 * scale), p + Vector2(8.0 * scale, 31.0 * scale), Color("#4e5e69"), 4.0 * scale)
+    draw_circle(p + Vector2(0, -17.0 * scale), 9.0 * scale, Color("#7fb573"))
+    draw_circle(p + Vector2(-3.2 * scale, -18.0 * scale), 1.7 * scale, Color("#081109"))
+    draw_circle(p + Vector2(3.0 * scale, -18.0 * scale), 1.7 * scale, Color("#081109"))
+    draw_line(p + Vector2(-4.0 * scale, -12.0 * scale), p + Vector2(4.0 * scale, -11.0 * scale), Color("#40242b"), 2.0 * scale)
+
+func _halloween_witch(center: Vector2, scale: float, seed: float) -> void:
+    var bob: float = sin(magic_clock * 1.35 + seed) * 2.5 * scale
+    var p: Vector2 = center + Vector2(0, bob)
+    _halloween_spectator_shadow(p + Vector2(0, 23.0 * scale), scale)
+    draw_colored_polygon(PackedVector2Array([
+        p + Vector2(-13.0 * scale, 20.0 * scale),
+        p + Vector2(13.0 * scale, 20.0 * scale),
+        p + Vector2(8.0 * scale, -2.0 * scale),
+        p + Vector2(0, -8.0 * scale),
+        p + Vector2(-8.0 * scale, -2.0 * scale)
+    ]), Color("#332249"))
+    draw_rect(Rect2(p + Vector2(-3.0 * scale, -2.0 * scale), Vector2(6.0 * scale, 26.0 * scale)), Color("#5a2e67"))
+    draw_circle(p + Vector2(0, -15.0 * scale), 8.0 * scale, Color("#d2c2b5"))
+    draw_colored_polygon(PackedVector2Array([
+        p + Vector2(-14.0 * scale, -18.0 * scale),
+        p + Vector2(14.0 * scale, -18.0 * scale),
+        p + Vector2(0, -22.0 * scale)
+    ]), Color("#171121"))
+    draw_colored_polygon(PackedVector2Array([
+        p + Vector2(-2.0 * scale, -39.0 * scale),
+        p + Vector2(10.0 * scale, -18.0 * scale),
+        p + Vector2(-6.0 * scale, -18.0 * scale)
+    ]), Color("#171121"))
+    draw_line(p + Vector2(-14.0 * scale, 2.0 * scale), p + Vector2(-24.0 * scale, 12.0 * scale), Color("#d99143"), 2.0 * scale)
+    draw_line(p + Vector2(-24.0 * scale, 12.0 * scale), p + Vector2(-20.0 * scale, 16.0 * scale), Color("#d99143"), 2.0 * scale)
+    draw_circle(p + Vector2(-26.0 * scale, 13.0 * scale), 3.0 * scale, Color("#7af0ff", 0.55))
+
+func _halloween_skeleton(center: Vector2, scale: float, seed: float) -> void:
+    var bob: float = sin(magic_clock * 1.9 + seed) * 2.0 * scale
+    var p: Vector2 = center + Vector2(0, bob)
+    _halloween_spectator_shadow(p + Vector2(0, 23.0 * scale), scale)
+    var bone := Color("#e8e4da")
+    draw_circle(p + Vector2(0, -16.0 * scale), 8.0 * scale, bone)
+    draw_circle(p + Vector2(-2.6 * scale, -17.0 * scale), 1.5 * scale, Color("#111420"))
+    draw_circle(p + Vector2(2.6 * scale, -17.0 * scale), 1.5 * scale, Color("#111420"))
+    draw_line(p + Vector2(0, -8.0 * scale), p + Vector2(0, 18.0 * scale), bone, 3.0 * scale)
+    draw_line(p + Vector2(-9.0 * scale, -2.0 * scale), p + Vector2(9.0 * scale, -2.0 * scale), bone, 3.0 * scale)
+    draw_line(p + Vector2(-8.0 * scale, -1.0 * scale), p + Vector2(-15.0 * scale, 11.0 * scale), bone, 2.0 * scale)
+    draw_line(p + Vector2(8.0 * scale, -1.0 * scale), p + Vector2(15.0 * scale, 11.0 * scale), bone, 2.0 * scale)
+    draw_line(p + Vector2(-1.0 * scale, 17.0 * scale), p + Vector2(-8.0 * scale, 31.0 * scale), bone, 2.0 * scale)
+    draw_line(p + Vector2(1.0 * scale, 17.0 * scale), p + Vector2(8.0 * scale, 31.0 * scale), bone, 2.0 * scale)
+    for r in 4:
+        draw_line(p + Vector2(-4.0 * scale, float(r) * 4.0 * scale + 1.0 * scale), p + Vector2(4.0 * scale, float(r) * 4.0 * scale + 1.0 * scale), bone, 1.0 * scale)
+
+func _halloween_vampire(center: Vector2, scale: float, seed: float) -> void:
+    var bob: float = sin(magic_clock * 1.45 + seed) * 2.1 * scale
+    var p: Vector2 = center + Vector2(0, bob)
+    _halloween_spectator_shadow(p + Vector2(0, 23.0 * scale), scale)
+    draw_colored_polygon(PackedVector2Array([
+        p + Vector2(-16.0 * scale, 18.0 * scale),
+        p + Vector2(-10.0 * scale, -6.0 * scale),
+        p + Vector2(-1.0 * scale, 7.0 * scale),
+        p + Vector2(0, 22.0 * scale),
+        p + Vector2(1.0 * scale, 7.0 * scale),
+        p + Vector2(10.0 * scale, -6.0 * scale),
+        p + Vector2(16.0 * scale, 18.0 * scale),
+        p + Vector2(8.0 * scale, 18.0 * scale),
+        p + Vector2(4.0 * scale, 25.0 * scale),
+        p + Vector2(-4.0 * scale, 25.0 * scale),
+        p + Vector2(-8.0 * scale, 18.0 * scale)
+    ]), Color("#5a1028"))
+    draw_rect(Rect2(p + Vector2(-6.0 * scale, -2.0 * scale), Vector2(12.0 * scale, 20.0 * scale)), Color("#1e1c2c"))
+    draw_circle(p + Vector2(0, -15.0 * scale), 8.0 * scale, Color("#eadccf"))
+    draw_circle(p + Vector2(-2.5 * scale, -16.0 * scale), 1.5 * scale, Color("#2a0e17"))
+    draw_circle(p + Vector2(2.5 * scale, -16.0 * scale), 1.5 * scale, Color("#2a0e17"))
+    draw_line(p + Vector2(-4.0 * scale, -12.0 * scale), p + Vector2(4.0 * scale, -12.0 * scale), Color("#7a203f"), 1.5 * scale)
+    draw_line(p + Vector2(-2.0 * scale, -11.0 * scale), p + Vector2(-1.0 * scale, -9.0 * scale), Color.WHITE, 1.0 * scale)
+    draw_line(p + Vector2(2.0 * scale, -11.0 * scale), p + Vector2(1.0 * scale, -9.0 * scale), Color.WHITE, 1.0 * scale)
+
+func _halloween_torch(center: Vector2, scale: float) -> void:
+    draw_rect(Rect2(center + Vector2(-2.0 * scale, -2.0 * scale), Vector2(4.0 * scale, 18.0 * scale)), Color("#61422b"))
+    draw_circle(center + Vector2(0, -7.0 * scale), 4.2 * scale, Color("#ff9e43", 0.45))
+    draw_colored_polygon(PackedVector2Array([
+        center + Vector2(0, -18.0 * scale),
+        center + Vector2(5.0 * scale, -8.0 * scale),
+        center + Vector2(0, -3.0 * scale),
+        center + Vector2(-5.0 * scale, -8.0 * scale)
+    ]), Color("#ffbb54", 0.9))
+    draw_colored_polygon(PackedVector2Array([
+        center + Vector2(0, -14.0 * scale),
+        center + Vector2(3.0 * scale, -8.0 * scale),
+        center + Vector2(0, -5.0 * scale),
+        center + Vector2(-3.0 * scale, -8.0 * scale)
+    ]), Color("#ff6f2f", 0.9))
+
+func _draw_halloween_spectator(kind: int, center: Vector2, scale: float, seed: float) -> void:
+    match kind:
+        0:
+            _halloween_zombie(center, scale, seed)
+        1:
+            _halloween_witch(center, scale, seed)
+        2:
+            _halloween_skeleton(center, scale, seed)
+        3:
+            _halloween_vampire(center, scale, seed)
+        _:
+            _halloween_ghost(center, 9.0 * scale, seed)
+
 func _halloween_arena(origin: Vector2, board_extent: Vector2) -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#100d1d"))
     var board_end: float = origin.y + board_extent.y
     var sky_base: float = maxf(125.0, origin.y - 12.0)
     draw_rect(Rect2(Vector2(0, 88), Vector2(size.x, maxf(12.0, sky_base - 88.0))), Color("#251632"))
     var moon: Vector2 = Vector2(size.x * 0.78, maxf(111.0, origin.y - 88.0))
-    draw_circle(moon, 43.0, Color("#ffe6b2", 0.09))
-    draw_circle(moon, 29.0, Color("#f9dbb3", 0.23))
-    draw_circle(moon, 21.0, Color("#ffe6bd", 0.93))
+    draw_circle(moon, 46.0, Color("#ffe6b2", 0.08))
+    draw_circle(moon, 31.0, Color("#f9dbb3", 0.20))
+    draw_circle(moon, 23.0, Color("#ffe6bd", 0.95))
+    draw_circle(moon + Vector2(5, -4), 6.0, Color("#e0c9a1", 0.18))
     # Gothic village and castle towers in the distance.
-    for i in 12:
-        var x: float = float(i) * size.x / 11.0 - 10.0
+    for i in 13:
+        var x: float = float(i) * size.x / 12.0 - 10.0
         var h: float = 17.0 + float((i * 19) % 33)
-        var width: float = 18.0 + float(i % 3) * 3.0
+        var width: float = 18.0 + float(i % 3) * 4.0
         var peak: float = sky_base - h
         draw_rect(Rect2(x, peak, width, h + 14.0), Color("#10101f"))
         draw_colored_polygon(PackedVector2Array([Vector2(x - 3, peak), Vector2(x + width * 0.5, peak - 15), Vector2(x + width + 3, peak)]), Color("#10101f"))
         if i % 3 != 1:
             draw_rect(Rect2(x + width * 0.42, peak + 9, 3, 7), Color("#ffa456", 0.84))
     # Silhouetted flying bats.
-    for i in 5:
+    for i in 6:
         var x: float = 19.0 + float(i) * (size.x - 43.0) / 5.0
         var y: float = maxf(106.0, origin.y - 89.0) - float((i * 11) % 23)
         var wing: float = 5.0 + float(i % 3)
         draw_line(Vector2(x - wing, y - 3), Vector2(x, y + 1), Color("#050611"), 2.2)
         draw_line(Vector2(x, y + 1), Vector2(x + wing, y - 3), Color("#050611"), 2.2)
-    # Bright supernatural spectator stands ABOVE and BELOW the game board.
-    var upper: float = origin.y - 54.0
-    if upper >= 155.0:
-        draw_rect(Rect2(7.0, upper - 28.0, size.x - 14.0, 50.0), Color("#181729", 0.90))
-        draw_line(Vector2(8, upper + 25), Vector2(size.x - 8, upper + 25), Color("#bd7240"), 3.0)
+    # Far arena floor and stands.
+    var arena_floor_y: float = board_end + 22.0
+    draw_rect(Rect2(0, arena_floor_y, size.x, size.y - arena_floor_y), Color("#120f1d"))
+    var upper: float = origin.y - 56.0
+    if upper >= 152.0:
+        var upper_rect := Rect2(10.0, upper - 32.0, size.x - 20.0, 58.0)
+        draw_rect(upper_rect, Color("#181729", 0.92))
+        draw_rect(Rect2(upper_rect.position.x, upper_rect.end.y - 12.0, upper_rect.size.x, 10.0), Color("#2b2233"))
+        draw_line(Vector2(upper_rect.position.x + 4.0, upper_rect.end.y - 3.0), Vector2(upper_rect.end.x - 4.0, upper_rect.end.y - 3.0), Color("#bd7240"), 3.0)
+        for i in 9:
+            var x: float = upper_rect.position.x + 18.0 + float(i) * (upper_rect.size.x - 36.0) / 8.0
+            var kind: int = i % 5
+            _draw_halloween_spectator(kind, Vector2(x, upper_rect.position.y + 27.0 + float(i % 2) * 3.0), 0.85 + float(i % 3) * 0.08, float(i) * 0.7)
+        _halloween_torch(Vector2(24.0, upper_rect.end.y - 2.0), 0.95)
+        _halloween_torch(Vector2(size.x - 24.0, upper_rect.end.y - 2.0), 0.95)
+    var lower: float = board_end + 48.0
+    if lower + 36.0 < size.y - 72.0:
+        var lower_rect := Rect2(9.0, lower - 28.0, size.x - 18.0, 66.0)
+        draw_rect(lower_rect, Color("#1d1827", 0.96))
+        draw_rect(Rect2(lower_rect.position.x, lower_rect.position.y, lower_rect.size.x, 11.0), Color("#2d2437"))
+        draw_line(Vector2(lower_rect.position.x + 3.0, lower_rect.position.y + 10.0), Vector2(lower_rect.end.x - 3.0, lower_rect.position.y + 10.0), Color("#ad6b4b"), 3.0)
         for i in 8:
-            var x: float = 24.0 + (float(i) + 0.18) * (size.x - 48.0) / 8.0
-            _halloween_ghost(Vector2(x, upper - 2.0 + float(i % 2) * 9.0), 9.0 + float(i % 3), float(i) * 1.3)
-        _halloween_pumpkin(Vector2(17, upper + 24), 11.0)
-        _halloween_pumpkin(Vector2(size.x - 17, upper + 24), 11.0)
-    var lower: float = board_end + 47.0
-    if lower + 26.0 < size.y - 73.0:
-        draw_rect(Rect2(5.0, lower - 25.0, size.x - 10.0, 53.0), Color("#1e1928", 0.92))
-        draw_line(Vector2(6, lower - 25), Vector2(size.x - 6, lower - 25), Color("#ad6b4b"), 3.0)
-        for i in 7:
-            var x: float = 24.0 + (float(i) + 0.1) * (size.x - 48.0) / 7.0
-            if i % 3 == 0:
-                _halloween_grave(Vector2(x, lower + 18), 1.12)
+            var x: float = lower_rect.position.x + 18.0 + float(i) * (lower_rect.size.x - 36.0) / 7.0
+            var kind: int = (i + 2) % 5
+            if i == 0 or i == 7:
+                _halloween_pumpkin(Vector2(x, lower_rect.end.y - 9.0), 13.0)
+            elif i % 4 == 0:
+                _halloween_grave(Vector2(x, lower_rect.end.y - 4.0), 1.10)
             else:
-                _halloween_ghost(Vector2(x, lower - 2.0), 10.5, float(i) * 0.92 + 9.0)
-        _halloween_pumpkin(Vector2(25, lower + 18), 13.0)
-        _halloween_pumpkin(Vector2(size.x - 26, lower + 18), 13.0)
-    # Thick raised stone platform, with a visible front bevel (pseudo-3D).
-    var depth: float = minf(14.0, maxf(7.0, board_extent.x * 0.032))
-    var back := Rect2(origin - Vector2(9, 9), board_extent + Vector2(18, 18))
+                _draw_halloween_spectator(kind, Vector2(x, lower_rect.position.y + 30.0), 0.88 + float(i % 2) * 0.12, float(i) * 0.9 + 11.0)
+    # Thick raised stone platform, with visible front and side bevels (pseudo-3D).
+    var depth: float = minf(22.0, maxf(10.0, board_extent.x * 0.052))
+    var side_depth: float = maxf(8.0, depth * 0.78)
+    var back := Rect2(origin - Vector2(10, 10), board_extent + Vector2(20, 20))
+    draw_colored_polygon(PackedVector2Array([
+        back.position + Vector2(18.0, back.size.y + depth + 10.0),
+        back.position + Vector2(back.size.x + 18.0, back.size.y + depth + 10.0),
+        back.position + Vector2(back.size.x - 16.0, back.size.y + 2.0),
+        back.position + Vector2(16.0, back.size.y + 2.0)
+    ]), Color("#03040a", 0.42))
+    draw_colored_polygon(PackedVector2Array([
+        Vector2(back.position.x, back.end.y),
+        Vector2(back.end.x, back.end.y),
+        Vector2(back.end.x - side_depth, back.end.y + depth),
+        Vector2(back.position.x + side_depth, back.end.y + depth)
+    ]), Color("#6b473f"))
+    draw_colored_polygon(PackedVector2Array([
+        Vector2(back.end.x, back.position.y),
+        Vector2(back.end.x, back.end.y),
+        Vector2(back.end.x - side_depth, back.end.y + depth),
+        Vector2(back.end.x - side_depth, back.position.y + depth)
+    ]), Color("#3f2d37"))
     draw_rect(back.grow(4.0), Color("#06060f"))
-    draw_colored_polygon(PackedVector2Array([Vector2(back.position.x, back.end.y), Vector2(back.end.x, back.end.y), Vector2(back.end.x - 5, back.end.y + depth), Vector2(back.position.x + 6, back.end.y + depth)]), Color("#70403d"))
-    draw_line(Vector2(back.position.x + 6, back.end.y + depth), Vector2(back.end.x - 5, back.end.y + depth), Color("#f5a650"), 2.0)
     draw_rect(back, Color("#24172e"))
     draw_rect(back, Color("#dd9c57"), false, 4.0)
-    # Side spectators: larger than before, glowing on both sides.
+    draw_line(Vector2(back.position.x + side_depth, back.end.y + depth), Vector2(back.end.x - side_depth, back.end.y + depth), Color("#f5a650"), 2.0)
+    draw_line(Vector2(back.end.x - side_depth, back.position.y + depth), Vector2(back.end.x - side_depth, back.end.y + depth), Color("#91606f"), 2.0)
+    # Side spectators in vertical mini-stands.
+    var side_top: float = origin.y + 18.0
+    var side_bottom: float = origin.y + board_extent.y - 20.0
     for side_id in 2:
-        var xx: float = origin.x - 17.0 if side_id == 0 else origin.x + board_extent.x + 17.0
-        for j in 8:
-            var yy: float = origin.y + (float(j) + 0.5) * board_extent.y / 8.0
-            _halloween_ghost(Vector2(xx, yy), 6.2, float(j) + float(side_id) * 2.4)
+        var left_side: bool = side_id == 0
+        var stand_x: float = origin.x - 49.0 if left_side else origin.x + board_extent.x + 13.0
+        var stand_rect := Rect2(stand_x, origin.y + 8.0, 36.0, board_extent.y - 16.0)
+        draw_rect(stand_rect, Color("#171521", 0.90))
+        draw_line(Vector2(stand_rect.position.x + 4.0, stand_rect.position.y + 6.0), Vector2(stand_rect.position.x + 4.0, stand_rect.end.y - 6.0), Color("#8f5c41"), 2.0)
+        draw_line(Vector2(stand_rect.end.x - 4.0, stand_rect.position.y + 6.0), Vector2(stand_rect.end.x - 4.0, stand_rect.end.y - 6.0), Color("#8f5c41"), 2.0)
+        for j in 5:
+            var yy: float = side_top + float(j) * (side_bottom - side_top) / 4.0
+            var kind: int = (j + side_id) % 5
+            var cx: float = stand_rect.position.x + stand_rect.size.x * 0.5
+            _draw_halloween_spectator(kind, Vector2(cx, yy), 0.68, float(j) + float(side_id) * 2.2)
+        _halloween_torch(Vector2(stand_rect.position.x + stand_rect.size.x * 0.5, stand_rect.position.y + 10.0), 0.70)
+        _halloween_torch(Vector2(stand_rect.position.x + stand_rect.size.x * 0.5, stand_rect.end.y - 2.0), 0.70)
 
 func _magic_ring(center: Vector2, radius: float, hue: Color, strong: bool = false) -> void:
     var wave: float = 0.5 + 0.5 * sin(magic_clock * 5.0)
