@@ -16,6 +16,7 @@ var message := "Ход голубых"
 var game_mode := 0 # 0 = bot, 1 = two players
 var game_over := false
 var bot_pending := false
+var winner := 0
 
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
@@ -32,16 +33,18 @@ func _reset_board() -> void:
     selected = -1
     turn = 1
     game_over = false
+    winner = 0
     bot_pending = false
     message = "Ход голубых"
     queue_redraw()
 
 func _geometry() -> Dictionary:
-    var top_margin := 108.0
-    var bottom_margin := 65.0
-    var usable := Vector2(size.x, max(1.0, size.y - top_margin - bottom_margin))
-    var cell_size: float = min(usable.x / COLS, usable.y / ROWS)
-    var offset := Vector2((size.x - COLS * cell_size) / 2.0, top_margin + (usable.y - ROWS * cell_size) / 2.0)
+    var top_margin := 120.0
+    var bottom_margin := 85.0
+    var side_margin := 27.0
+    var usable := Vector2(max(1.0, size.x - 2.0 * side_margin), max(1.0, size.y - top_margin - bottom_margin))
+    var cell_size: float = floor(min(usable.x / COLS, usable.y / ROWS))
+    var offset := Vector2(floor((size.x - COLS * cell_size) / 2.0), floor(top_margin + (usable.y - ROWS * cell_size) / 2.0))
     return {"cell_size": cell_size, "offset": offset}
 
 func _piece_at(cell: Vector2i) -> int:
@@ -128,6 +131,8 @@ func _tap(cell: Vector2i) -> void:
             if ball_holder == capture["victim"]:
                 ball_holder = selected
             _move_selected(cell)
+            if _check_goal():
+                return
             if not _captures(selected).is_empty():
                 message = "Продолжай съедение той же фишкой"
                 queue_redraw()
@@ -166,7 +171,8 @@ func _check_goal() -> bool:
     if cell.x == goal_row and cell.y >= 2 and cell.y <= 5:
         scores[turn - 1] += 1
         if scores[turn - 1] >= 3:
-            message = "Победа голубых!" if turn == 1 else "Победа красных!"
+            winner = turn
+            message = "ПОБЕДА!" if (game_mode == 1 or turn == 1) else "ВЫ ПРОИГРАЛИ"
             selected = -1
             game_over = true
             queue_redraw()
@@ -263,10 +269,28 @@ func _draw() -> void:
     draw_string(font, Vector2(12, 61), "С БОТОМ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(tab_width + 12, 61), "НА ДВОИХ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(18, 95), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+    # Board: exact square cells, dark at bottom-right. Coordinates outside the board.
+    draw_rect(Rect2(offset - Vector2(2, 2), Vector2(COLS * side + 4, ROWS * side + 4)), Color("#b7a6c8"))
     for row in ROWS:
         for col in COLS:
             var rect := Rect2(offset + Vector2(col, row) * side, Vector2.ONE * side)
             draw_rect(rect, Color("#30243f") if (row + col) % 2 == 0 else Color("#665174"))
+    for col in COLS:
+        var letter := char(65 + col)
+        var x := offset.x + (col + 0.5) * side - 5.0
+        draw_string(font, Vector2(x, offset.y - 7), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#e9e0f0"))
+        draw_string(font, Vector2(x, offset.y + ROWS * side + 19), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#e9e0f0"))
+    for row in ROWS:
+        var label := str(ROWS - row)
+        var y := offset.y + (row + 0.5) * side + 5.0
+        draw_string(font, Vector2(offset.x - 23, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
+        draw_string(font, Vector2(offset.x + COLS * side + 7, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
+    # Goal lines: central four cells on each end.
+    for goal_row in [0, ROWS - 1]:
+        var goal_start := offset + Vector2(2 * side, goal_row * side)
+        var goal_end := goal_start + Vector2(4 * side, 0)
+        draw_line(goal_start, goal_end, Color("#e6ca70"), 4.0)
+
     for i in pieces.size():
         if not pieces[i]["alive"]:
             continue
@@ -280,3 +304,12 @@ func _draw() -> void:
     if ball_holder == -1:
         draw_circle(offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side, side * 0.18, BALL)
     draw_string(font, Vector2(18, size.y - 24), "СБРОС / НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#dddddd"))
+    if game_over:
+        var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
+        draw_rect(panel, Color("#15111eef"))
+        draw_rect(panel, Color("#f6cf65"), false, 3.0)
+        var heading := "ПОЗДРАВЛЯЕМ С ПОБЕДОЙ!" if (game_mode == 1 or winner == 1) else "ВЫ ПРОИГРАЛИ!"
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 52), heading, HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 24, Color.WHITE)
+        var detail := "Победили голубые" if winner == 1 else "Победили красные"
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 87), "%s · Счёт %d : %d" % [detail, scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color("#f6cf65"))
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 117), "Нажми НОВАЯ ИГРА, чтобы сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 14, Color.WHITE)
