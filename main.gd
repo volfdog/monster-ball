@@ -20,6 +20,15 @@ var game_over := false
 var bot_pending := false
 var winner := 0
 
+# The goal is celebrated BEFORE resetting the pitch or showing the winner panel.
+var celebrating: bool = false
+var celebration_time: float = 0.0
+var celebration_duration: float = 3.2
+var celebration_team: int = 1
+var celebration_reason: String = ""
+var celebration_final: bool = false
+
+
 
 # High-detail fantasy assets are loaded from the local assets folder.
 var fantasy_textures: Dictionary = {}
@@ -47,7 +56,53 @@ var pending_skin: int = -1
 var flame_time: float = 0.0
 var fancy_font: Font
 
+
+# Halloween Sound Edition: shared per-scene sound system. No autoload required.
+var sound_library: Dictionary = {}
+var arena_music: AudioStreamPlayer
+
+func _setup_game_audio() -> void:
+    for sound_name in ["stone_move", "king_move", "capture", "pass", "goal", "crowd", "victory", "arena_ambience"]:
+        var audio_path: String = "res://audio/%s.wav" % sound_name
+        if ResourceLoader.exists(audio_path):
+            sound_library[sound_name] = load(audio_path)
+    arena_music = AudioStreamPlayer.new()
+    arena_music.name = "HalloweenAmbience"
+    add_child(arena_music)
+    if sound_library.has("arena_ambience"):
+        var ambience: AudioStream = sound_library["arena_ambience"]
+        var wav_ambience: AudioStreamWAV = ambience as AudioStreamWAV
+        if wav_ambience != null:
+            wav_ambience.loop_mode = AudioStreamWAV.LOOP_FORWARD
+        arena_music.stream = ambience
+        arena_music.volume_db = linear_to_db(maxf(0.001, float(get_tree().root.get_meta("mb_vol_music", 0.55)) * 0.23))
+        if not bool(get_tree().root.get_meta("mb_muted", false)):
+            arena_music.play()
+
+func _play_sfx(sound_name: String, channel: String = "effects") -> void:
+    if not sound_library.has(sound_name) or bool(get_tree().root.get_meta("mb_muted", false)):
+        return
+    var volume_key: String = "mb_vol_crowd" if channel == "crowd" else "mb_vol_effects"
+    var v: float = float(get_tree().root.get_meta(volume_key, 0.78))
+    if v <= 0.005:
+        return
+    var player: AudioStreamPlayer = AudioStreamPlayer.new()
+    add_child(player)
+    player.stream = sound_library[sound_name]
+    player.volume_db = linear_to_db(maxf(0.001, v * (0.68 if channel == "crowd" else 0.85)))
+    player.finished.connect(func(): player.queue_free())
+    player.play()
+
 func _process(delta: float) -> void:
+    if celebrating:
+        celebration_time = maxf(0.0, celebration_time - delta)
+        if celebration_time <= 0.0:
+            celebrating = false
+            if not game_over:
+                var completed_reason: String = celebration_reason
+                _reset_board()
+                message = "%s  %d : %d" % [completed_reason, scores[0], scores[1]]
+        queue_redraw()
     magic_clock += delta
     if fmod(magic_clock, 0.11) < delta: queue_redraw()
     if fx_progress < 1.0:
@@ -305,6 +360,40 @@ func _draw_halloween_spectator(kind: int, center: Vector2, scale: float, seed: f
         _:
             _halloween_ghost(center, 9.0 * scale, seed)
 
+
+# Visible Halloween castle rising behind the raised arena, drawn without external sprites.
+func _draw_halloween_castle(center: Vector2, scale: float) -> void:
+    var p: Vector2 = center
+    var castle_stone := Color("#28223b")
+    var castle_light := Color("#4d4058")
+    draw_colored_polygon(PackedVector2Array([
+        p + Vector2(-100.0, 42.0) * scale,
+        p + Vector2(-96.0, 11.0) * scale,
+        p + Vector2(96.0, 11.0) * scale,
+        p + Vector2(100.0, 42.0) * scale
+    ]), Color("#0c0c1e", 0.8))
+    draw_rect(Rect2(p + Vector2(-63, -20) * scale, Vector2(126, 62) * scale), castle_stone)
+    draw_rect(Rect2(p + Vector2(-25, -50) * scale, Vector2(50, 92) * scale), Color("#322940"))
+    for index in 4:
+        var xx: float = -85.0 + float(index) * 56.0
+        var tower_h: float = 74.0 if index == 0 or index == 3 else 105.0
+        var origin: Vector2 = p + Vector2(xx, 42.0 - tower_h) * scale
+        draw_rect(Rect2(origin, Vector2(29, tower_h) * scale), castle_stone)
+        draw_rect(Rect2(origin + Vector2(3, 2) * scale, Vector2(4, tower_h - 4) * scale), castle_light)
+        draw_colored_polygon(PackedVector2Array([
+            origin + Vector2(-9, 4) * scale,
+            origin + Vector2(14.5, -32) * scale,
+            origin + Vector2(38, 4) * scale
+        ]), Color("#151426"))
+        draw_rect(Rect2(origin + Vector2(10, 18) * scale, Vector2(7, 17) * scale), Color("#ffba65", 0.88))
+        draw_line(origin + Vector2(13.5,18) * scale, origin + Vector2(13.5,35) * scale, Color("#613845"), 2.0)
+    for battlement in 11:
+        draw_rect(Rect2(p + Vector2(-66 + battlement * 12.3, -25) * scale, Vector2(8, 9) * scale), castle_stone)
+    draw_rect(Rect2(p + Vector2(-13, 13) * scale, Vector2(26, 29) * scale), Color("#0d1020"))
+    draw_circle(p + Vector2(0, 15) * scale, 13.0 * scale, Color("#0d1020"))
+    for x in [-45.0, -10.0, 29.0]:
+        draw_rect(Rect2(p + Vector2(x, -7) * scale, Vector2(8, 16) * scale), Color("#ffc06c", 0.8))
+
 func _halloween_arena(origin: Vector2, board_extent: Vector2) -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#100d1d"))
     var board_end: float = origin.y + board_extent.y
@@ -325,6 +414,7 @@ func _halloween_arena(origin: Vector2, board_extent: Vector2) -> void:
         draw_colored_polygon(PackedVector2Array([Vector2(x - 3, peak), Vector2(x + width * 0.5, peak - 15), Vector2(x + width + 3, peak)]), Color("#10101f"))
         if i % 3 != 1:
             draw_rect(Rect2(x + width * 0.42, peak + 9, 3, 7), Color("#ffa456", 0.84))
+    _draw_halloween_castle(Vector2(size.x * 0.49, sky_base - 16.0), minf(1.0, size.x / 465.0))
     # Silhouetted flying bats.
     for i in 6:
         var x: float = 19.0 + float(i) * (size.x - 43.0) / 5.0
@@ -406,6 +496,36 @@ func _halloween_arena(origin: Vector2, board_extent: Vector2) -> void:
             _draw_halloween_spectator(kind, Vector2(cx, yy), 0.68, float(j) + float(side_id) * 2.2)
         _halloween_torch(Vector2(stand_rect.position.x + stand_rect.size.x * 0.5, stand_rect.position.y + 10.0), 0.70)
         _halloween_torch(Vector2(stand_rect.position.x + stand_rect.size.x * 0.5, stand_rect.end.y - 2.0), 0.70)
+
+
+# Bat-shaped sparkles, confetti, tumbling discs and fanfare during celebrations.
+func _draw_halloween_party(progress: float, team_id: int, final_win: bool) -> void:
+    var elapsed: float = clampf(progress, 0.0, 1.0)
+    var winner_color: Color = Color("#4ac5e8") if team_id == 1 else Color("#f36f7e")
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#090b17", 0.14 + 0.12 * sin(elapsed * PI)))
+    for index in 95:
+        var fall_speed: float = 0.73 + float(index % 6) * 0.18
+        var x: float = 6.0 + fposmod(float(index * 67) + 10.0 * sin(elapsed * 13.0 + index), maxf(1.0, size.x - 12.0))
+        var y: float = fposmod(float(index * 107) + elapsed * size.y * fall_speed, size.y + 130.0) - 65.0
+        var spin: float = elapsed * 14.0 + float(index) * 0.82
+        var dx: Vector2 = Vector2(cos(spin), sin(spin)) * (2.5 + float(index % 3))
+        var dy: Vector2 = Vector2(-sin(spin), cos(spin)) * (4.5 + float(index % 4))
+        var color: Color = Color("#ffac4e") if index % 4 == 0 else (winner_color if index % 4 == 1 else (Color("#aaf2b4") if index % 4 == 2 else Color("#f7e5d2")))
+        draw_colored_polygon(PackedVector2Array([
+            Vector2(x,y) - dx - dy, Vector2(x,y) + dx - dy,
+            Vector2(x,y) + dx + dy, Vector2(x,y) - dx + dy
+        ]), color)
+    var pulse: float = 1.0 + 0.15 * sin(elapsed * 19.0)
+    for index in 6:
+        var center: Vector2 = Vector2(size.x * (0.13 + 0.15 * float(index)), size.y * (0.25 if index % 2 == 0 else 0.68))
+        var radius: float = (16.0 + float(index % 3) * 6.0) * pulse
+        draw_arc(center, radius, elapsed * 1.5, elapsed * 1.5 + TAU * 0.92, 24, Color("#ffa646", 0.75), 3.0)
+    var banner_y: float = size.y * 0.44
+    draw_rect(Rect2(12.0, banner_y - 51.0, size.x - 24.0, 119.0), Color("#130e25", 0.94))
+    draw_rect(Rect2(12.0, banner_y - 51.0, size.x - 24.0, 119.0), Color("#efaa5b"), false, 3.0)
+    var font: Font = ThemeDB.fallback_font
+    draw_string(font, Vector2(20, banner_y + 3.0), "ПОБЕДА!" if final_win else "ГООООЛ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 40.0, 38, Color("#ffcf76"))
+    draw_string(font, Vector2(20, banner_y + 39.0), "СИНИЕ ПРАЗДНУЮТ!" if team_id == 1 else "КРАСНЫЕ ПРАЗДНУЮТ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 40.0, 18, winner_color)
 
 func _magic_ring(center: Vector2, radius: float, hue: Color, strong: bool = false) -> void:
     var wave: float = 0.5 + 0.5 * sin(magic_clock * 5.0)
@@ -524,7 +644,7 @@ func _drag_is_own_piece(cell: Vector2i) -> bool:
     return i >= 0 and int(pieces[i]["team"]) == turn
 
 func _drag_can_start(point: Vector2) -> bool:
-    return not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
+    return not celebrating and not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
 
 func _draw_drag_piece_overlay(side: float) -> void:
     if not drag_active or not drag_moved or selected < 0 or selected >= pieces.size():
@@ -586,6 +706,7 @@ var pass_fx_to: Vector2i = Vector2i(-1, -1)
 var pass_fx_progress: float = 1.0
 
 func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void:
+    _play_sfx("stone_move")
     fx_piece = index
     fx_from = origin
     fx_to = destination
@@ -593,6 +714,7 @@ func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void
     fx_duration = 0.60
 
 func _start_hit_fx(cell: Vector2i) -> void:
+    _play_sfx("capture")
     fx_impact = cell
     fx_impact_time = 0.55
 
@@ -633,16 +755,25 @@ func _living(team_id: int) -> int:
     return n
 
 func _award_point(team_id: int, reason: String) -> void:
+    if celebrating or game_over:
+        return
     scores[team_id - 1] += 1
-    if scores[team_id - 1] >= 3:
+    celebrating = true
+    celebration_team = team_id
+    celebration_reason = reason
+    celebration_final = scores[team_id - 1] >= 3
+    celebration_duration = 4.2 if celebration_final else 3.2
+    celebration_time = celebration_duration
+    selected = -1
+    bot_pending = false
+    message = "%s  %d : %d" % [reason, scores[0], scores[1]]
+    if celebration_final:
         winner = team_id
         game_over = true
-        selected = -1
-        bot_pending = false
-        message = "ПОБЕДА!" if game_mode == 1 or team_id == 1 else "ВЫ ПРОИГРАЛИ"
-    else:
-        _reset_board()
-        message = "%s  %d : %d" % [reason, scores[0], scores[1]]
+    _play_sfx("goal")
+    _play_sfx("crowd", "crowd")
+    if celebration_final:
+        _play_sfx("victory")
     queue_redraw()
 
 func _check_elimination() -> bool:
@@ -656,6 +787,7 @@ func _check_elimination() -> bool:
 
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
+    _setup_game_audio()
     if ResourceLoader.exists("res://assets/game_font.ttf"):
         fancy_font = load("res://assets/game_font.ttf")
     _load_fantasy_assets()
@@ -676,6 +808,8 @@ func _ready() -> void:
                 piece_skins[j] = clampi(int(saved[j]), 0, 3)
 
 func _reset_board() -> void:
+    celebrating = false
+    celebration_time = 0.0
     pieces.clear()
     fx_progress = 1.0
     fx_impact_time = 0.0
@@ -756,6 +890,7 @@ func _pass_ball(to_index: int) -> void:
     pass_fx_from = pieces[ball_holder]["cell"]
     pass_fx_to = pieces[to_index]["cell"]
     pass_fx_progress = 0.0
+    _play_sfx("pass")
     ball_holder = to_index
     ball_cell = pass_fx_to
     var score_before: Array = scores.duplicate()
@@ -801,6 +936,8 @@ func _gui_input(event: InputEvent) -> void:
     else:
         return
     accept_event()
+    if celebrating:
+        return
     if customization_open:
         if pending_skin >= 0:
             _confirmation_tap(point)
@@ -1151,8 +1288,10 @@ func _draw() -> void:
     _draw_drag_hints()
     _draw_game_fx()
     _draw_drag_piece_overlay(side)
+    if celebrating:
+        _draw_halloween_party(1.0 - celebration_time / maxf(0.01, celebration_duration), celebration_team, celebration_final)
     _draw_bottom_actions()
-    if game_over:
+    if game_over and not celebrating:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
         draw_rect(panel, Color("#15111eef"))
         draw_rect(panel, Color("#f6cf65"), false, 3.0)
