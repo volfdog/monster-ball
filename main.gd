@@ -269,58 +269,77 @@ func _draw() -> void:
     draw_string(font, Vector2(12, 61), "С БОТОМ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(tab_width + 12, 61), "НА ДВОИХ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(18, 95), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
-    # Exactly square cells. Thin grid lines keep every row and column aligned.
+    # Fantasy stone board. Geometry and input coordinates stay unchanged.
     var board_size := Vector2(COLS * side, ROWS * side)
-    draw_rect(Rect2(offset, board_size), Color("#30243f"))
+    draw_rect(Rect2(offset - Vector2(6, 6), board_size + Vector2(12, 12)), Color("#0b1925"))
+    draw_rect(Rect2(offset - Vector2(4, 4), board_size + Vector2(8, 8)), Color("#61869c"), false, 3.0)
     for row in ROWS:
         for col in COLS:
-            var rect := Rect2(offset + Vector2(col, row) * side, Vector2(side, side))
-            draw_rect(rect, Color("#30243f") if (row + col) % 2 == 0 else Color("#665174"))
-    var grid_color := Color("#201a2b", 0.42)
+            var pos := offset + Vector2(col, row) * side
+            var rect := Rect2(pos, Vector2(side, side))
+            var dark := (row + col) % 2 == 0
+            var stone := Color("#152c3b") if dark else Color("#697786")
+            var variation := float(((row * 17 + col * 29) % 9) - 4) * 0.012
+            stone = stone.lightened(variation) if variation >= 0.0 else stone.darkened(-variation)
+            draw_rect(rect, stone)
+            draw_line(pos + Vector2(2, 2), pos + Vector2(side - 3, 2), Color("#9fd6df", 0.14 if dark else 0.26), 1.5)
+            draw_line(pos + Vector2(2, 2), pos + Vector2(2, side - 3), Color("#b6e4e6", 0.12 if dark else 0.24), 1.5)
+            draw_line(pos + Vector2(2, side - 2), pos + Vector2(side - 2, side - 2), Color("#030e18", 0.45), 2.0)
+            draw_line(pos + Vector2(side - 2, 2), pos + Vector2(side - 2, side - 2), Color("#030e18", 0.35), 2.0)
+            # Fine cracks in the stone, deterministically placed.
+            if (row * 7 + col * 11) % 4 == 0:
+                var crack := Color("#091521", 0.24)
+                draw_line(pos + Vector2(side * 0.18, side * 0.23), pos + Vector2(side * 0.39, side * 0.32), crack, 1.0)
+                draw_line(pos + Vector2(side * 0.39, side * 0.32), pos + Vector2(side * 0.48, side * 0.51), crack, 1.0)
+                draw_line(pos + Vector2(side * 0.48, side * 0.51), pos + Vector2(side * 0.70, side * 0.57), crack, 1.0)
+            if (row + col) % 2 == 0:
+                var rune := pos + Vector2.ONE * (side * 0.5)
+                draw_arc(rune, side * 0.22, 0.0, TAU, 20, Color("#4be4ef", 0.075), 1.0)
+                draw_line(rune + Vector2(-side * 0.12, 0), rune + Vector2(side * 0.12, 0), Color("#6fe5f1", 0.075), 1.0)
     for col in range(COLS + 1):
         var x := offset.x + col * side
-        draw_line(Vector2(x, offset.y), Vector2(x, offset.y + board_size.y), grid_color, 1.0)
+        draw_line(Vector2(x, offset.y), Vector2(x, offset.y + board_size.y), Color("#07131f", 0.6), 1.0)
     for row in range(ROWS + 1):
         var y := offset.y + row * side
-        draw_line(Vector2(offset.x, y), Vector2(offset.x + board_size.x, y), grid_color, 1.0)
-    draw_rect(Rect2(offset, board_size), Color("#17121e"), false, 3.0)
+        draw_line(Vector2(offset.x, y), Vector2(offset.x + board_size.x, y), Color("#07131f", 0.6), 1.0)
+    draw_rect(Rect2(offset, board_size), Color("#82cadc", 0.75), false, 2.0)
     for col in COLS:
         var letter := char(65 + col)
         var x := offset.x + (col + 0.5) * side - 5.0
-        draw_string(font, Vector2(x, offset.y - 7), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#e9e0f0"))
-        draw_string(font, Vector2(x, offset.y + ROWS * side + 19), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#e9e0f0"))
+        draw_string(font, Vector2(x, offset.y - 10), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#b9e5e8"))
+        draw_string(font, Vector2(x, offset.y + ROWS * side + 21), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#b9e5e8"))
     for row in ROWS:
         var label := str(ROWS - row)
         var y := offset.y + (row + 0.5) * side + 5.0
-        draw_string(font, Vector2(offset.x - 23, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
-        draw_string(font, Vector2(offset.x + COLS * side + 7, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
-    # Goals outside the pitch, behind the defenders. The top goal belongs
-    # to red, and the bottom goal belongs to blue.
+        draw_string(font, Vector2(offset.x - 23, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+        draw_string(font, Vector2(offset.x + COLS * side + 7, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+    # Glowing goal frames are BEHIND the pieces, outside the pitch.
     var goal_left := offset.x + 2.0 * side
     var goal_right := offset.x + 6.0 * side
     var goal_depth := min(12.0, side * 0.15)
-    var goal_color := Color("#f6cf65")
-    # Net outlines are drawn OUTSIDE the playing squares.
-    draw_line(Vector2(goal_left, offset.y), Vector2(goal_left, offset.y - goal_depth), goal_color, 3.0)
-    draw_line(Vector2(goal_left, offset.y - goal_depth), Vector2(goal_right, offset.y - goal_depth), goal_color, 3.0)
-    draw_line(Vector2(goal_right, offset.y - goal_depth), Vector2(goal_right, offset.y), goal_color, 3.0)
-    var bottom := offset.y + board_size.y
-    draw_line(Vector2(goal_left, bottom), Vector2(goal_left, bottom + goal_depth), goal_color, 3.0)
-    draw_line(Vector2(goal_left, bottom + goal_depth), Vector2(goal_right, bottom + goal_depth), goal_color, 3.0)
-    draw_line(Vector2(goal_right, bottom + goal_depth), Vector2(goal_right, bottom), goal_color, 3.0)
-
+    for edge_y in [offset.y, offset.y + board_size.y]:
+        var sign_dir := -1.0 if edge_y == offset.y else 1.0
+        var a := Vector2(goal_left, edge_y)
+        var b := Vector2(goal_left, edge_y + goal_depth * sign_dir)
+        var c := Vector2(goal_right, edge_y + goal_depth * sign_dir)
+        var d := Vector2(goal_right, edge_y)
+        for thickness in [9.0, 5.0, 2.5]:
+            var glow := Color("#40e3ff", 0.12) if thickness == 9.0 else (Color("#4af5ff", 0.38) if thickness == 5.0 else Color("#bafaff"))
+            draw_line(a, b, glow, thickness)
+            draw_line(b, c, glow, thickness)
+            draw_line(c, d, glow, thickness)
     for i in pieces.size():
         if not pieces[i]["alive"]:
             continue
         var cell: Vector2i = pieces[i]["cell"]
         var center := offset + Vector2(cell.y + 0.5, cell.x + 0.5) * side
         if i == selected:
-            draw_rect(Rect2(offset + Vector2(cell.y, cell.x) * side, Vector2.ONE * side), Color("#a4c886"), false, 4.0)
-        draw_circle(center, side * 0.32, BLUE if pieces[i]["team"] == 1 else RED)
+            draw_rect(Rect2(offset + Vector2(cell.y, cell.x) * side, Vector2.ONE * side), Color("#7ff9e2"), false, 3.0)
+        _draw_fantasy_token(center, side * 0.37, int(pieces[i]["team"]), i)
         if ball_holder == i:
-            draw_circle(center, side * 0.13, BALL)
+            _draw_ghost_pumpkin(center + Vector2(side * 0.17, -side * 0.20), side * 0.16)
     if ball_holder == -1:
-        draw_circle(offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side, side * 0.18, BALL)
+        _draw_ghost_pumpkin(offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side, side * 0.23)
     draw_string(font, Vector2(18, size.y - 24), "СБРОС / НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#dddddd"))
     if game_over:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
@@ -331,3 +350,53 @@ func _draw() -> void:
         var detail := "Победили голубые" if winner == 1 else "Победили красные"
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 87), "%s · Счёт %d : %d" % [detail, scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color("#f6cf65"))
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 117), "Нажми НОВАЯ ИГРА, чтобы сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 14, Color.WHITE)
+
+
+# Beveled metal rim, glassy core and engraved fantasy insignia.
+func _draw_fantasy_token(center: Vector2, radius: float, team: int, token_index: int) -> void:
+    var metal := Color("#247aab") if team == 1 else Color("#a53e43")
+    var light := Color("#68edff") if team == 1 else Color("#ff8c6a")
+    var dark := Color("#09253c") if team == 1 else Color("#3b1724")
+    draw_circle(center + Vector2(radius * 0.12, radius * 0.19), radius * 1.07, Color("#000712", 0.57))
+    draw_circle(center, radius * 1.08, light.darkened(0.35))
+    draw_circle(center, radius * 0.99, metal)
+    draw_circle(center + Vector2(0, radius * 0.055), radius * 0.86, dark)
+    draw_circle(center - Vector2(radius * 0.06, radius * 0.07), radius * 0.73, Color("#274f66") if team == 1 else Color("#63333c"))
+    draw_arc(center, radius * 0.94, PI * 1.04, PI * 1.91, 32, light, max(1.5, radius * 0.13))
+    draw_arc(center, radius * 0.94, PI * 0.03, PI * 0.89, 32, Color("#06121d"), max(1.5, radius * 0.12))
+    draw_arc(center, radius * 0.78, 0.0, TAU, 48, Color("#d4f4e5", 0.38), 1.5)
+    # Unique sigils: blue knights and red demonic masks.
+    if team == 1:
+        var hood := PackedVector2Array([center + Vector2(-radius * 0.50, radius * 0.38), center + Vector2(-radius * 0.31, -radius * 0.42), center + Vector2(0, -radius * 0.65), center + Vector2(radius * 0.32, -radius * 0.42), center + Vector2(radius * 0.49, radius * 0.39)])
+        draw_colored_polygon(hood, Color("#95b6cc"))
+        draw_circle(center + Vector2(0, -radius * 0.03), radius * 0.30, Color("#d5c6a8"))
+        draw_line(center + Vector2(-radius * 0.21, -radius * 0.08), center + Vector2(radius * 0.21, -radius * 0.08), Color("#17334c"), max(1.5, radius * 0.14))
+        draw_line(center + Vector2(-radius * 0.35, radius * 0.28), center + Vector2(radius * 0.35, radius * 0.28), Color("#e1faff"), max(1.5, radius * 0.14))
+    else:
+        var head := PackedVector2Array([center + Vector2(-radius * 0.46, -radius * 0.28), center + Vector2(-radius * 0.22, -radius * 0.54), center + Vector2(radius * 0.23, -radius * 0.54), center + Vector2(radius * 0.46, -radius * 0.25), center + Vector2(radius * 0.30, radius * 0.41), center + Vector2(0, radius * 0.55), center + Vector2(-radius * 0.30, radius * 0.41)])
+        draw_colored_polygon(head, Color("#b3b8c1"))
+        draw_colored_polygon(PackedVector2Array([center + Vector2(-radius * 0.48, -radius * 0.28), center + Vector2(-radius * 0.60, -radius * 0.70), center + Vector2(-radius * 0.15, -radius * 0.48)]), Color("#cbd5d9"))
+        draw_colored_polygon(PackedVector2Array([center + Vector2(radius * 0.48, -radius * 0.28), center + Vector2(radius * 0.60, -radius * 0.70), center + Vector2(radius * 0.15, -radius * 0.48)]), Color("#cbd5d9"))
+        draw_line(center + Vector2(-radius * 0.26, -radius * 0.04), center + Vector2(-radius * 0.08, radius * 0.02), Color("#ff3c2d"), max(2.0, radius * 0.13))
+        draw_line(center + Vector2(radius * 0.26, -radius * 0.04), center + Vector2(radius * 0.08, radius * 0.02), Color("#ff3c2d"), max(2.0, radius * 0.13))
+        draw_line(center + Vector2(-radius * 0.13, radius * 0.29), center + Vector2(radius * 0.13, radius * 0.29), Color("#301923"), max(1.5, radius * 0.10))
+    # Four tiny rivets on the metal rim.
+    for angle in [0.0, PI * 0.5, PI, PI * 1.5]:
+        draw_circle(center + Vector2(cos(angle), sin(angle)) * radius * 0.92, max(1.0, radius * 0.065), Color("#e3d7b4"))
+
+
+func _draw_ghost_pumpkin(center: Vector2, radius: float) -> void:
+    # Layered translucent halos create an eerie supernatural glow.
+    for step in range(5, 0, -1):
+        var halo_radius := radius * (1.0 + float(step) * 0.31)
+        draw_circle(center, halo_radius, Color("#44f7cf", 0.025 + (6 - step) * 0.012))
+    draw_circle(center + Vector2(radius * 0.08, radius * 0.14), radius * 1.05, Color("#071219", 0.4))
+    draw_circle(center, radius, Color("#ed8a2d"))
+    draw_circle(center + Vector2(-radius * 0.28, -radius * 0.08), radius * 0.62, Color("#ffa63a"))
+    draw_circle(center + Vector2(radius * 0.30, -radius * 0.08), radius * 0.62, Color("#ce651f"))
+    draw_circle(center + Vector2(0, -radius * 0.06), radius * 0.67, Color("#ffb449"))
+    draw_line(center + Vector2(0, -radius * 0.86), center + Vector2(radius * 0.14, -radius * 1.18), Color("#73db88"), max(2.0, radius * 0.19))
+    draw_colored_polygon(PackedVector2Array([center + Vector2(-radius * 0.63, -radius * 0.14), center + Vector2(-radius * 0.10, -radius * 0.14), center + Vector2(-radius * 0.31, radius * 0.23)]), Color("#102f28"))
+    draw_colored_polygon(PackedVector2Array([center + Vector2(radius * 0.63, -radius * 0.14), center + Vector2(radius * 0.10, -radius * 0.14), center + Vector2(radius * 0.31, radius * 0.23)]), Color("#102f28"))
+    draw_colored_polygon(PackedVector2Array([center + Vector2(-radius * 0.55, radius * 0.38), center + Vector2(0, radius * 0.67), center + Vector2(radius * 0.55, radius * 0.38), center + Vector2(radius * 0.25, radius * 0.30), center + Vector2(0, radius * 0.45), center + Vector2(-radius * 0.25, radius * 0.30)]), Color("#14372b"))
+    draw_arc(center, radius * 1.02, 0.0, TAU, 32, Color("#a7ffe0", 0.8), max(1.0, radius * 0.08))
