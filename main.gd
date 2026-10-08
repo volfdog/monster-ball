@@ -294,14 +294,20 @@ func _draw() -> void:
         var y := offset.y + (row + 0.5) * side + 5.0
         draw_string(font, Vector2(offset.x - 23, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
         draw_string(font, Vector2(offset.x + COLS * side + 7, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#e9e0f0"))
-    # Goals are BEHIND the starting pieces, on the outer edges of the board.
-    # Red goal at the top; blue goal at the bottom.
+    # Goals outside the pitch, behind the defenders. The top goal belongs
+    # to red, and the bottom goal belongs to blue.
     var goal_left := offset.x + 2.0 * side
     var goal_right := offset.x + 6.0 * side
-    for goal_y in [offset.y - 2.0, offset.y + ROWS * side + 2.0]:
-        draw_line(Vector2(goal_left, goal_y), Vector2(goal_right, goal_y), Color("#f6cf65"), 5.0)
-        draw_line(Vector2(goal_left, goal_y - 6.0), Vector2(goal_left, goal_y + 6.0), Color("#f6cf65"), 3.0)
-        draw_line(Vector2(goal_right, goal_y - 6.0), Vector2(goal_right, goal_y + 6.0), Color("#f6cf65"), 3.0)
+    var goal_depth := min(12.0, side * 0.15)
+    var goal_color := Color("#f6cf65")
+    # Net outlines are drawn OUTSIDE the playing squares.
+    draw_line(Vector2(goal_left, offset.y), Vector2(goal_left, offset.y - goal_depth), goal_color, 3.0)
+    draw_line(Vector2(goal_left, offset.y - goal_depth), Vector2(goal_right, offset.y - goal_depth), goal_color, 3.0)
+    draw_line(Vector2(goal_right, offset.y - goal_depth), Vector2(goal_right, offset.y), goal_color, 3.0)
+    var bottom := offset.y + board_size.y
+    draw_line(Vector2(goal_left, bottom), Vector2(goal_left, bottom + goal_depth), goal_color, 3.0)
+    draw_line(Vector2(goal_left, bottom + goal_depth), Vector2(goal_right, bottom + goal_depth), goal_color, 3.0)
+    draw_line(Vector2(goal_right, bottom + goal_depth), Vector2(goal_right, bottom), goal_color, 3.0)
 
     for i in pieces.size():
         if not pieces[i]["alive"]:
