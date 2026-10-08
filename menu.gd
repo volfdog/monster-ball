@@ -10,6 +10,7 @@ var panel: VBoxContainer
 var menu_music: AudioStreamPlayer
 var menu_click_stream: AudioStream
 var menu_music_unlocked: bool = false
+var background_test_status: Label
 const AUDIO_KEYS := ["mb_vol_music", "mb_vol_effects", "mb_vol_crowd", "mb_muted"]
 
 func _read_audio_settings() -> void:
@@ -34,8 +35,11 @@ func _init_menu_audio() -> void:
         var melody: AudioStream = load(theme_path)
         var wav_melody: AudioStreamWAV = melody as AudioStreamWAV
         if wav_melody != null:
-            wav_melody.loop_mode = AudioStreamWAV.LOOP_FORWARD
+            # Explicitly disable WAV looping: default loop_end = 0 may
+            # create a zero-length loop in exported browsers.
+            wav_melody.loop_mode = AudioStreamWAV.LOOP_DISABLED
         menu_music.stream = melody
+        menu_music.finished.connect(_restart_menu_music)
     if ResourceLoader.exists("res://audio/menu_click.wav"):
         menu_click_stream = load("res://audio/menu_click.wav")
     _update_menu_audio()
@@ -45,14 +49,19 @@ func _update_menu_audio() -> void:
         return
     var muted: bool = bool(get_tree().root.get_meta("mb_muted", false))
     var volume: float = float(get_tree().root.get_meta("mb_vol_music", 0.55))
-    menu_music.volume_db = linear_to_db(maxf(0.001, volume * 0.60))
+    menu_music.volume_db = linear_to_db(maxf(0.001, volume * 0.95))
     if muted or volume < 0.005:
         menu_music.stop()
-    elif not menu_music.playing:
+    elif menu_music_unlocked and not menu_music.playing:
         menu_music.play()
 
+# Player.finished is more reliable here than WAV loop points on exported Web builds.
+func _restart_menu_music() -> void:
+    if not is_inside_tree() or not menu_music_unlocked:
+        return
+    _update_menu_audio()
+
 # A user gesture is needed to release web audio on iPhone/Safari.
-# Stop/restart even if Godot reported "playing" while WebAudio was suspended.
 func _unlock_menu_music() -> void:
     if menu_music_unlocked:
         return
@@ -80,6 +89,30 @@ func _play_menu_click() -> void:
     fx.volume_db = linear_to_db(maxf(0.001, volume * 0.7))
     fx.finished.connect(func(): fx.queue_free())
     fx.play()
+
+# A single diagnostic button confirms actual playback after a real user tap.
+func _test_background_audio() -> void:
+    _unlock_menu_music()
+    var melody_ready: bool = menu_music != null and menu_music.stream != null
+    if melody_ready:
+        menu_music.stop()
+        menu_music.play()
+    var crowd_ready: bool = ResourceLoader.exists("res://audio/crowd.wav")
+    if crowd_ready:
+        var test_stream: AudioStream = load("res://audio/crowd.wav")
+        if test_stream != null:
+            # This test is intentionally loud and one-shot, like working SFX.
+            var test_player: AudioStreamPlayer = AudioStreamPlayer.new()
+            test_player.name = "CrowdSoundTest"
+            add_child(test_player)
+            test_player.stream = test_stream
+            test_player.volume_db = 0.0
+            test_player.finished.connect(func(): test_player.queue_free())
+            test_player.play()
+        else:
+            crowd_ready = false
+    if background_test_status != null and is_instance_valid(background_test_status):
+        background_test_status.text = "Музыка: %s  |  Зрители: %s" % ["запущена" if melody_ready else "файл не найден", "запущены" if crowd_ready else "файл не найден"]
 
 func _sound_slider(title: String, key: String, fallback: float) -> void:
     var label: Label = Label.new()
@@ -122,6 +155,7 @@ func _build() -> void:
     veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
     veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
     add_child(veil)
+    background_test_status = null
     panel = VBoxContainer.new()
     panel.set_anchors_preset(Control.PRESET_FULL_RECT)
     panel.anchor_left = 0.07
@@ -135,7 +169,7 @@ func _build() -> void:
     panel.add_theme_constant_override("separation", 12)
     add_child(panel)
     var heading := Label.new()
-    heading.text = "НАСТРОЙКИ ЗВУКА" if section == "sound" else ("ВЫБЕРИ СЛОЖНОСТЬ" if choose_difficulty else ("ДОБРО ПОЖАЛОВАТЬ!" if section == "" else ("ШАШКИ" if section == "checkers" else "ФУТБОЛ")))
+    heading.text = "ЗВУК • FIX 3" if section == "sound" else ("ВЫБЕРИ СЛОЖНОСТЬ" if choose_difficulty else ("ДОБРО ПОЖАЛОВАТЬ!" if section == "" else ("ШАШКИ" if section == "checkers" else "ФУТБОЛ")))
     heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     heading.add_theme_font_size_override("font_size", 27)
     heading.add_theme_color_override("font_color", Color("#f5dca6"))
@@ -159,6 +193,12 @@ func _build() -> void:
         _sound_slider("МУЗЫКА", "mb_vol_music", 0.55)
         _sound_slider("ЭФФЕКТЫ", "mb_vol_effects", 0.78)
         _sound_slider("ЗРИТЕЛИ", "mb_vol_crowd", 0.65)
+        _button("▶ ПРОВЕРИТЬ ФОН", func(): _test_background_audio())
+        background_test_status = Label.new()
+        background_test_status.add_theme_font_size_override("font_size", 12)
+        background_test_status.add_theme_color_override("font_color", Color("#b7e9c5"))
+        background_test_status.text = "Нажми «Проверить фон»"
+        panel.add_child(background_test_status)
         _button("← НАЗАД", func(): section = ""; _build())
     else:
         _button("ИГРА С БОТОМ", func(): choose_difficulty = true; _build())

@@ -62,6 +62,7 @@ var sound_library: Dictionary = {}
 var arena_music: AudioStreamPlayer
 var crowd_ambience: AudioStreamPlayer
 var game_audio_unlocked: bool = false
+var background_audio_poll: float = 0.0
 
 func _setup_game_audio() -> void:
     for sound_name in ["stone_move", "king_move", "capture", "pass", "goal", "crowd", "victory", "arena_ambience"]:
@@ -75,42 +76,68 @@ func _setup_game_audio() -> void:
         var ambience: AudioStream = sound_library["arena_ambience"]
         var wav_ambience: AudioStreamWAV = ambience as AudioStreamWAV
         if wav_ambience != null:
-            wav_ambience.loop_mode = AudioStreamWAV.LOOP_FORWARD
+            # Do not use native WAV looping with an unset end point.
+            wav_ambience.loop_mode = AudioStreamWAV.LOOP_DISABLED
         arena_music.stream = ambience
-        arena_music.volume_db = linear_to_db(maxf(0.001, float(get_tree().root.get_meta("mb_vol_music", 0.55)) * 0.23))
-        if not bool(get_tree().root.get_meta("mb_muted", false)) and float(get_tree().root.get_meta("mb_vol_music", 0.55)) > 0.005:
-            arena_music.play()
+        arena_music.finished.connect(_restart_arena_ambience)
 
-    # Continuous spectator murmur, independent of short goal celebrations.
-    # Duplicate the stream: the ordinary "crowd" effect must NOT loop forever.
     crowd_ambience = AudioStreamPlayer.new()
-    crowd_ambience.name = "HalloweenCrowdLoop"
+    crowd_ambience.name = "HalloweenCrowdBackground"
     add_child(crowd_ambience)
     if sound_library.has("crowd"):
-        var crowd_stream: AudioStreamWAV = sound_library["crowd"] as AudioStreamWAV
-        if crowd_stream != null:
-            var looping_crowd: AudioStreamWAV = crowd_stream.duplicate() as AudioStreamWAV
-            looping_crowd.loop_mode = AudioStreamWAV.LOOP_FORWARD
-            crowd_ambience.stream = looping_crowd
+        # The regular crowd effect remains a short one-shot at goal time.
+        var original_crowd: AudioStreamWAV = sound_library["crowd"] as AudioStreamWAV
+        if original_crowd != null:
+            var crowd_copy: AudioStreamWAV = original_crowd.duplicate() as AudioStreamWAV
+            crowd_copy.loop_mode = AudioStreamWAV.LOOP_DISABLED
+            crowd_ambience.stream = crowd_copy
         else:
             crowd_ambience.stream = sound_library["crowd"]
-        var crowd_volume: float = float(get_tree().root.get_meta("mb_vol_crowd", 0.65))
-        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * 0.70))
-        if not bool(get_tree().root.get_meta("mb_muted", false)) and crowd_volume > 0.005:
+        crowd_ambience.finished.connect(_restart_crowd_ambience)
+    _refresh_background_volumes()
+
+func _refresh_background_volumes() -> void:
+    if not is_inside_tree():
+        return
+    var muted: bool = bool(get_tree().root.get_meta("mb_muted", false))
+    var music_volume: float = float(get_tree().root.get_meta("mb_vol_music", 0.55))
+    var crowd_volume: float = float(get_tree().root.get_meta("mb_vol_crowd", 0.65))
+    if arena_music != null:
+        arena_music.volume_db = linear_to_db(maxf(0.001, music_volume * 0.60))
+        if muted or music_volume <= 0.005:
+            arena_music.stop()
+    if crowd_ambience != null:
+        # The original crowd WAV is quiet; do not attenuate it again.
+        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * 1.10))
+        if muted or crowd_volume <= 0.005:
+            crowd_ambience.stop()
+
+func _restart_arena_ambience() -> void:
+    _resume_background_audio()
+
+func _restart_crowd_ambience() -> void:
+    _resume_background_audio()
+
+func _resume_background_audio() -> void:
+    if not game_audio_unlocked or not is_inside_tree():
+        return
+    var muted: bool = bool(get_tree().root.get_meta("mb_muted", false))
+    _refresh_background_volumes()
+    if muted:
+        return
+    if arena_music != null and arena_music.stream != null and not arena_music.playing:
+        if float(get_tree().root.get_meta("mb_vol_music", 0.55)) > 0.005:
+            arena_music.play()
+    if crowd_ambience != null and crowd_ambience.stream != null and not crowd_ambience.playing:
+        if float(get_tree().root.get_meta("mb_vol_crowd", 0.65)) > 0.005:
             crowd_ambience.play()
 
-# Browser audio can report "playing" before the first iOS gesture.
-# Restart ambient tracks once, directly on the first touch or click.
+# Start only after a real iPhone gesture, just like the working one-shot sounds.
 func _unlock_game_audio() -> void:
     if game_audio_unlocked:
         return
     game_audio_unlocked = true
-    if bool(get_tree().root.get_meta("mb_muted", false)):
-        return
-    for player in [arena_music, crowd_ambience]:
-        if player != null and player.stream != null:
-            player.stop()
-            player.play()
+    _resume_background_audio()
 
 func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     if not sound_library.has(sound_name) or bool(get_tree().root.get_meta("mb_muted", false)):
@@ -127,6 +154,12 @@ func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     player.play()
 
 func _process(delta: float) -> void:
+    # Retry occasionally if Safari suspended a background player.
+    if game_audio_unlocked:
+        background_audio_poll += delta
+        if background_audio_poll > 2.0:
+            background_audio_poll = 0.0
+            _resume_background_audio()
     if celebrating:
         celebration_time = maxf(0.0, celebration_time - delta)
         if celebration_time <= 0.0:
