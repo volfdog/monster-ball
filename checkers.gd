@@ -20,8 +20,72 @@ var customization_team: int = 1
 var customization_kind: int = 0 # 0 pawn, 1 king
 
 
+
+var pending_skin: int = -1
+var flame_clock: float = 0.0
+var skin_font: Font
+
+func _process(delta: float) -> void:
+    if customization_open:
+        flame_clock += delta
+        queue_redraw()
+
+func _skin_font() -> Font:
+    return skin_font if skin_font != null else ThemeDB.fallback_font
+
+func _flame_border(rect: Rect2, active: bool) -> void:
+    if not active:
+        draw_rect(rect, Color("#526477"), false, 2.0)
+        return
+    var pulse: float = 0.5 + 0.5 * sin(flame_clock * 4.0)
+    draw_rect(rect.grow(4.0), Color(1.0, 0.26, 0.04, 0.15 + 0.2 * pulse), false, 6.0)
+    draw_rect(rect, Color("#ffb84b"), false, 3.0)
+    for k in 16:
+        var t: float = fposmod(float(k) / 16.0 + flame_clock * 0.19, 1.0)
+        var d: float = t * (rect.size.x + rect.size.y) * 2.0
+        var v: Vector2 = rect.position
+        if d < rect.size.x:
+            v.x += d
+        elif d < rect.size.x + rect.size.y:
+            v += Vector2(rect.size.x, d - rect.size.x)
+        elif d < 2.0 * rect.size.x + rect.size.y:
+            v += Vector2(2.0 * rect.size.x + rect.size.y - d, rect.size.y)
+        else:
+            v += Vector2(0.0, 2.0 * (rect.size.x + rect.size.y) - d)
+        draw_circle(v, 2.0 + 1.6 * pulse, Color("#ff8526", 0.85))
+
+func _draw_skin_confirm() -> void:
+    if pending_skin < 0:
+        return
+    var font: Font = _skin_font()
+    var w: float = minf(size.x - 24.0, 410.0)
+    var r := Rect2(Vector2((size.x - w) * 0.5, (size.y - 210.0) * 0.5), Vector2(w, 210.0))
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#050711", 0.85))
+    draw_rect(r, Color("#1d1724"))
+    _flame_border(r, true)
+    draw_string(font, r.position + Vector2(18, 48), "СМЕНА ОБЛИКА", HORIZONTAL_ALIGNMENT_LEFT, w - 36, 22, Color("#ffd18b"))
+    draw_string(font, r.position + Vector2(18, 90), "Вы уверены?", HORIZONTAL_ALIGNMENT_LEFT, w - 36, 20, Color.WHITE)
+    var half: float = (w - 42.0) * 0.5
+    var y: float = r.end.y - 64.0
+    draw_rect(Rect2(r.position.x + 14, y, half, 46), Color("#3b3d4b"))
+    draw_rect(Rect2(r.position.x + 28 + half, y, half, 46), Color("#914e24"))
+    draw_string(font, Vector2(r.position.x + 23, y + 30), "ОТМЕНА", HORIZONTAL_ALIGNMENT_LEFT, half - 12, 15, Color.WHITE)
+    draw_string(font, Vector2(r.position.x + 37 + half, y + 30), "ПОДТВЕРДИТЬ", HORIZONTAL_ALIGNMENT_LEFT, half - 12, 14, Color.WHITE)
+
+func _confirm_skin_tap(pos: Vector2) -> void:
+    var w: float = minf(size.x - 24.0, 410.0)
+    var r := Rect2(Vector2((size.x - w) * 0.5, (size.y - 210.0) * 0.5), Vector2(w, 210.0))
+    var y: float = r.end.y - 64.0
+    if pos.y >= y and pos.y <= y + 46.0 and pos.x >= r.position.x and pos.x <= r.end.x:
+        if pos.x > size.x * 0.5:
+            _apply_skin_choice()
+        pending_skin = -1
+    queue_redraw()
+
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
+    if ResourceLoader.exists("res://assets/game_font.ttf"):
+        skin_font = load("res://assets/game_font.ttf")
     for name in ["stone_dark", "stone_light", "blue_knight", "blue_wizard", "blue_rogue", "blue_dwarf", "red_orc", "red_skull", "red_goblin", "red_vampire"]:
         var path: String = "res://assets/%s.png" % name
         if ResourceLoader.exists(path):
@@ -180,6 +244,9 @@ func _gui_input(event: InputEvent) -> void:
     if pos.x < 0: return
     accept_event()
     if customization_open:
+        if pending_skin >= 0:
+            _confirm_skin_tap(pos)
+            return
         _customization_tap(pos)
         return
     if pos.y < 42.0:
@@ -257,7 +324,16 @@ func _draw() -> void:
         draw_string(font,o+Vector2(8*s+7,(r+0.58)*s),label,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#b9e5e8"))
     draw_string(font,Vector2(18,size.y-25),"НОВАЯ ПАРТИЯ",HORIZONTAL_ALIGNMENT_LEFT,-1,17,Color.WHITE)
     if customization_open:
-        _draw_customization(font)
+        _draw_customization(_skin_font())
+        _draw_skin_confirm()
+
+func _apply_skin_choice() -> void:
+    if customization_kind == 0:
+        pawn_skin[customization_team - 1] = pending_skin
+        get_tree().root.set_meta("mb_checkers_pawn", pawn_skin.duplicate())
+    else:
+        king_skin[customization_team - 1] = pending_skin
+        get_tree().root.set_meta("mb_checkers_king", king_skin.duplicate())
 
 func _customization_tap(pos: Vector2) -> void:
     if pos.y < 120.0 or pos.y > size.y - 65.0:
@@ -268,12 +344,7 @@ func _customization_tap(pos: Vector2) -> void:
         customization_kind = 0 if pos.x < size.x * 0.5 else 1
     elif pos.y < 380.0:
         var index: int = clampi(int(pos.x / maxf(1.0, size.x / 4.0)), 0, 3)
-        if customization_kind == 0:
-            pawn_skin[customization_team - 1] = index
-            get_tree().root.set_meta("mb_checkers_pawn", pawn_skin.duplicate())
-        else:
-            king_skin[customization_team - 1] = index
-            get_tree().root.set_meta("mb_checkers_king", king_skin.duplicate())
+        pending_skin = index
     queue_redraw()
 
 func _draw_customization(font: Font) -> void:
@@ -294,11 +365,11 @@ func _draw_customization(font: Font) -> void:
     for i in 4:
         var w: float = size.x / 4.0
         var rect := Rect2(i * w + 4.0, 267, w - 8.0, w - 8.0)
-        draw_rect(rect.grow(3.0), Color("#76ffe0") if chosen == i else Color("#536476"), false, 3.0)
+        _flame_border(rect.grow(3.0), chosen == i)
         if textures.has(skins[i]):
             draw_texture_rect(textures[skins[i]], rect, false)
-        draw_string(font, Vector2(i * w + 10.0, 284.0 + w), str(i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
-    draw_string(font, Vector2(14, 416), "Выбери вид для всей команды", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+        draw_string(font, Vector2(i * w + 8.0, 286.0 + w), "ОБЛИК %d" % (i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
+    draw_string(font, Vector2(14, 323.0 + size.x / 4.0), "Выбери вид для всей команды", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(14, size.y - 25), "ЗАКРЫТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
 
 func _schedule_bot() -> void:
