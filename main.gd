@@ -21,6 +21,13 @@ var winner := 0
 
 # High-detail fantasy assets are loaded from the local assets folder.
 var fantasy_textures: Dictionary = {}
+const BLUE_SKINS := ["blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf"]
+const RED_SKINS := ["red_skull", "red_orc", "red_goblin", "red_vampire"]
+var piece_skins: Array[int] = [0, 1, 2, 3, 0, 1, 2, 3]
+var customization_open: bool = false
+var customization_team: int = 1
+var customization_slot: int = 0
+
 
 func _load_fantasy_assets() -> void:
     for key in ["stone_dark", "stone_light", "blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf", "red_skull", "red_orc", "red_goblin", "red_vampire", "ghost_pumpkin"]:
@@ -56,7 +63,7 @@ func _reset_board() -> void:
     queue_redraw()
 
 func _geometry() -> Dictionary:
-    var top_margin := 120.0
+    var top_margin := 154.0
     var bottom_margin := 85.0
     var side_margin := 29.0
     var usable := Vector2(max(1.0, size.x - 2.0 * side_margin), max(1.0, size.y - top_margin - bottom_margin))
@@ -103,6 +110,15 @@ func _gui_input(event: InputEvent) -> void:
     else:
         return
     accept_event()
+    if customization_open:
+        _customization_tap(point)
+        return
+    if point.y >= 72.0 and point.y <= 116.0:
+        customization_open = true
+        customization_team = 1
+        customization_slot = 0
+        queue_redraw()
+        return
     # Tap the mode tabs at the top, or the restart button at the bottom.
     if point.y < 70.0:
         if point.x < size.x * 0.5:
@@ -112,6 +128,9 @@ func _gui_input(event: InputEvent) -> void:
         scores = [0, 0]
         _reset_board()
         queue_redraw()
+        return
+    if point.y >= 77.0 and point.y <= 120.0 and point.x >= size.x * 0.60:
+        get_tree().change_scene_to_file("res://checkers.tscn")
         return
     if point.y > size.y - 57.0:
         scores = [0, 0]
@@ -127,6 +146,19 @@ func _gui_input(event: InputEvent) -> void:
     var cell := Vector2i(row, col)
     if _inside(cell):
         _tap(cell)
+
+func _customization_tap(point: Vector2) -> void:
+    if point.y < 130.0 or point.y > size.y - 65.0:
+        customization_open = false
+    elif point.y < 180.0:
+        customization_team = 1 if point.x < size.x * 0.5 else 2
+        customization_slot = 0
+    elif point.y < 245.0:
+        customization_slot = clampi(int(point.x / maxf(1.0, size.x / 4.0)), 0, 3)
+    elif point.y < 360.0:
+        var skin: int = clampi(int(point.x / maxf(1.0, size.x / 4.0)), 0, 3)
+        piece_skins[(customization_team - 1) * 4 + customization_slot] = skin
+    queue_redraw()
 
 func _tap(cell: Vector2i) -> void:
     var clicked := _piece_at(cell)
@@ -285,7 +317,11 @@ func _draw() -> void:
     draw_rect(Rect2(tab_width, 38, tab_width, 32), Color("#347d80") if game_mode == 1 else Color("#37303d"))
     draw_string(font, Vector2(12, 61), "С БОТОМ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
     draw_string(font, Vector2(tab_width + 12, 61), "НА ДВОИХ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
-    draw_string(font, Vector2(18, 95), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+    draw_rect(Rect2(0, 74, size.x, 42), Color("#253a4b"))
+    draw_string(font, Vector2(18, 101), "ГЕРОИ / ВНЕШНОСТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#c7efff"))
+    draw_string(font, Vector2(18, 137), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
+    draw_rect(Rect2(size.x * 0.60, 76, size.x * 0.38, 40), Color("#347d80"))
+    draw_string(font, Vector2(size.x * 0.65, 103), "ШАШКИ  ›", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
     # Fantasy stone board. Geometry and input coordinates stay unchanged.
     var board_size := Vector2(COLS * side, ROWS * side)
     draw_rect(Rect2(offset - Vector2(6, 6), board_size + Vector2(12, 12)), Color("#0b1925"))
@@ -354,7 +390,7 @@ func _draw() -> void:
         if i == selected:
             draw_rect(Rect2(offset + Vector2(cell.y, cell.x) * side, Vector2.ONE * side), Color("#7ff9e2"), false, 3.0)
         var team: int = pieces[i]["team"]
-        var key: String = ["blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf"][i % 4] if team == 1 else ["red_skull", "red_orc", "red_goblin", "red_vampire"][i % 4]
+        var key: String = BLUE_SKINS[piece_skins[i]] if team == 1 else RED_SKINS[piece_skins[i]]
         var token_side := side * 0.93
         if not _draw_asset(key, Rect2(center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
             _draw_fantasy_token(center, side * 0.37, team, i)
@@ -378,6 +414,33 @@ func _draw() -> void:
         var detail := "Победили голубые" if winner == 1 else "Победили красные"
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 87), "%s · Счёт %d : %d" % [detail, scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color("#f6cf65"))
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 117), "Нажми НОВАЯ ИГРА, чтобы сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 14, Color.WHITE)
+
+
+    if customization_open:
+        draw_rect(Rect2(Vector2.ZERO, size), Color("#070d18", 0.94))
+        draw_string(font, Vector2(16, 52), "ГЕРОИ — ВЫБОР ВНЕШНОСТИ", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color.WHITE)
+        draw_string(font, Vector2(16, 103), "Нажми здесь, чтобы закрыть", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#a5d4dc"))
+        var half: float = size.x / 2.0
+        draw_rect(Rect2(0, 140, half, 39), Color("#236d83") if customization_team == 1 else Color("#343743"))
+        draw_rect(Rect2(half, 140, half, 39), Color("#923d50") if customization_team == 2 else Color("#343743"))
+        draw_string(font, Vector2(10, 166), "СИНИЕ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
+        draw_string(font, Vector2(half + 10, 166), "КРАСНЫЕ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
+        var skins: Array = BLUE_SKINS if customization_team == 1 else RED_SKINS
+        for slot in 4:
+            var x: float = float(slot) * size.x / 4.0
+            var w: float = size.x / 4.0
+            draw_rect(Rect2(x + 2, 192, w - 4, 46), Color("#38687a") if slot == customization_slot else Color("#303441"))
+            draw_string(font, Vector2(x + 10, 222), "Фишка %d" % (slot + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color.WHITE)
+        for skin_idx in 4:
+            var w: float = size.x / 4.0
+            var x: float = skin_idx * w
+            var rect := Rect2(x + 4, 265, w - 8, w - 8)
+            var chosen: bool = piece_skins[(customization_team - 1) * 4 + customization_slot] == skin_idx
+            draw_rect(rect.grow(3), Color("#7af5cc") if chosen else Color("#41556b"), false, 3.0)
+            _draw_asset(skins[skin_idx], rect)
+            draw_string(font, Vector2(x + 8, 282 + w), str(skin_idx + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
+        draw_string(font, Vector2(14, 405), "Выбери фишку, затем облик", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
+        draw_string(font, Vector2(14, size.y - 26), "ЗАКРЫТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#a5d4dc"))
 
 
 # Beveled metal rim, glassy core and engraved fantasy insignia.
