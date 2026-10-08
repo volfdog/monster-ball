@@ -2,219 +2,187 @@ extends Control
 
 const ROWS := 10
 const COLS := 8
-const START_1 := [Vector2i(9,0), Vector2i(9,2), Vector2i(9,4), Vector2i(9,6), Vector2i(8,3)]
-const START_2 := [Vector2i(0,1), Vector2i(0,3), Vector2i(0,5), Vector2i(0,7), Vector2i(1,4)]
+const BLUE := Color("#4ac5e8")
+const RED := Color("#e45a78")
+const BALL := Color("#f6cf65")
 
-var pieces: Array = []
-var ball := {"cell": Vector2i(4,3), "holder": -1}
+var pieces: Array[Dictionary] = []
+var ball_cell := Vector2i(4, 3)
+var ball_holder := -1
 var turn := 1
 var selected := -1
 var scores := [0, 0]
-var cells: Array[Button] = []
-var status: Label
-var score_label: Label
-var game_over := false
+var message := "Ход голубых"
 
 func _ready() -> void:
-    set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    _build_ui()
-    _reset_rally()
+    mouse_filter = Control.MOUSE_FILTER_STOP
+    _reset_board()
 
-func _build_ui() -> void:
-    var bg := ColorRect.new()
-    bg.color = Color("07110d")
-    bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    add_child(bg)
-
-    var root := VBoxContainer.new()
-    root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    root.offset_left = 12
-    root.offset_right = -12
-    root.offset_top = 18
-    root.offset_bottom = -18
-    root.add_theme_constant_override("separation", 10)
-    add_child(root)
-
-    var title := Label.new()
-    title.text = "MONSTER BALL 3.0"
-    title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    title.add_theme_font_size_override("font_size", 25)
-    root.add_child(title)
-
-    score_label = Label.new()
-    score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    score_label.add_theme_font_size_override("font_size", 22)
-    root.add_child(score_label)
-
-    status = Label.new()
-    status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    root.add_child(status)
-
-    var frame := PanelContainer.new()
-    frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    root.add_child(frame)
-
-    var board := GridContainer.new()
-    board.columns = COLS
-    board.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    board.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    board.add_theme_constant_override("h_separation", 2)
-    board.add_theme_constant_override("v_separation", 2)
-    frame.add_child(board)
-
-    for r in range(ROWS):
-        for c in range(COLS):
-            var b := Button.new()
-            b.custom_minimum_size = Vector2(36, 36)
-            b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-            b.size_flags_vertical = Control.SIZE_EXPAND_FILL
-            b.focus_mode = Control.FOCUS_NONE
-            b.pressed.connect(_cell_pressed.bind(r, c))
-            board.add_child(b)
-            cells.append(b)
-
-    var hint := Label.new()
-    hint.text = "Нажми свою фишку, затем соседнюю клетку по диагонали"
-    hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    root.add_child(hint)
-
-func _reset_rally() -> void:
+func _reset_board() -> void:
     pieces.clear()
-    for i in range(5):
-        pieces.append({"team": 1, "cell": START_1[i], "alive": true, "hero": i == 0})
-    for i in range(5):
-        pieces.append({"team": 2, "cell": START_2[i], "alive": true, "hero": i == 0})
-    ball = {"cell": Vector2i(4,3), "holder": -1}
-    turn = 1
+    for c in [0, 2, 4, 6]:
+        pieces.append({"team": 1, "cell": Vector2i(9, c + 1), "alive": true})
+    for c in [1, 3, 5, 7]:
+        pieces.append({"team": 2, "cell": Vector2i(0, c - 1), "alive": true})
+    ball_cell = Vector2i(4, 3)
+    ball_holder = -1
     selected = -1
-    status.text = "Ход синих. Нажми синюю фишку"
-    _render()
+    turn = 1
+    message = "Ход голубых"
+    queue_redraw()
+
+func _geometry() -> Dictionary:
+    var top_margin := 75.0
+    var bottom_margin := 65.0
+    var usable := Vector2(size.x, max(1.0, size.y - top_margin - bottom_margin))
+    var cell_size: float = min(usable.x / COLS, usable.y / ROWS)
+    var offset := Vector2((size.x - COLS * cell_size) / 2.0, top_margin + (usable.y - ROWS * cell_size) / 2.0)
+    return {"cell_size": cell_size, "offset": offset}
 
 func _piece_at(cell: Vector2i) -> int:
-    for i in range(pieces.size()):
+    for i in pieces.size():
         if pieces[i]["alive"] and pieces[i]["cell"] == cell:
             return i
     return -1
 
-func _captures_for(i: int) -> Array:
-    var out: Array = []
+func _captures(i: int) -> Array:
+    var result: Array = []
+    if not pieces[i]["alive"]:
+        return result
     var p: Dictionary = pieces[i]
-    for d in [Vector2i(1,1), Vector2i(1,-1), Vector2i(-1,1), Vector2i(-1,-1)]:
-        var mid: Vector2i = p["cell"] + d
-        var land: Vector2i = p["cell"] + d * 2
-        if land.x < 0 or land.x >= ROWS or land.y < 0 or land.y >= COLS:
+    for direction in [Vector2i(-1, -1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(1, 1)]:
+        var middle: Vector2i = p["cell"] + direction
+        var landing: Vector2i = p["cell"] + direction * 2
+        if not _inside(landing):
             continue
-        var j := _piece_at(mid)
-        if j >= 0 and pieces[j]["team"] != p["team"] and _piece_at(land) < 0:
-            out.append({"to": land, "eat": j})
-    return out
+        var victim := _piece_at(middle)
+        if victim >= 0 and pieces[victim]["team"] != p["team"] and _piece_at(landing) == -1:
+            result.append({"cell": landing, "victim": victim})
+    return result
 
-func _team_has_capture(team: int) -> bool:
-    for i in range(pieces.size()):
-        if pieces[i]["alive"] and pieces[i]["team"] == team and not _captures_for(i).is_empty():
+func _team_must_capture(team: int) -> bool:
+    for i in pieces.size():
+        if pieces[i]["alive"] and pieces[i]["team"] == team and not _captures(i).is_empty():
             return true
     return false
 
-func _cell_pressed(r: int, c: int) -> void:
-    if game_over:
+func _inside(cell: Vector2i) -> bool:
+    return cell.x >= 0 and cell.x < ROWS and cell.y >= 0 and cell.y < COLS
+
+func _gui_input(event: InputEvent) -> void:
+    var point := Vector2(-1, -1)
+    if event is InputEventScreenTouch and event.pressed:
+        point = event.position
+    elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+        point = event.position
+    else:
         return
-    var cell := Vector2i(r, c)
-    var at := _piece_at(cell)
-    if at >= 0 and pieces[at]["team"] == turn:
-        if _team_has_capture(turn) and _captures_for(at).is_empty():
-            status.text = "Нужно съесть соперника другой фишкой"
-            return
-        selected = at
-        status.text = "Фишка выбрана. Нажми клетку для хода"
-        _render()
+    accept_event()
+    var geometry := _geometry()
+    var origin: Vector2 = geometry["offset"]
+    var side: float = geometry["cell_size"]
+    var col := int(floor((point.x - origin.x) / side))
+    var row := int(floor((point.y - origin.y) / side))
+    var cell := Vector2i(row, col)
+    if _inside(cell):
+        _tap(cell)
+
+func _tap(cell: Vector2i) -> void:
+    var clicked := _piece_at(cell)
+    if clicked >= 0 and pieces[clicked]["team"] == turn:
+        if _team_must_capture(turn) and _captures(clicked).is_empty():
+            message = "Нужно съесть фишку соперника"
+        else:
+            selected = clicked
+            message = "Выбери соседнюю диагональную клетку"
+        queue_redraw()
         return
     if selected < 0:
-        status.text = "Сначала нажми свою фишку"
+        message = "Сначала нажми свою фишку"
+        queue_redraw()
         return
-    if at >= 0:
-        status.text = "Клетка занята"
-        return
-    var p: Dictionary = pieces[selected]
-    for cap in _captures_for(selected):
-        if cap["to"] == cell:
-            pieces[cap["eat"]]["alive"] = false
-            if ball["holder"] == cap["eat"]:
-                ball["holder"] = selected
-            pieces[selected]["cell"] = cell
-            if ball["holder"] == selected:
-                ball["cell"] = cell
-            elif ball["holder"] < 0 and ball["cell"] == cell:
-                ball["holder"] = selected
-            if _check_goal(selected):
-                return
-            if not _captures_for(selected).is_empty():
-                status.text = "Продолжай серию съедений"
-                _render()
-                return
-            _end_turn()
+    for capture in _captures(selected):
+        if capture["cell"] == cell:
+            pieces[capture["victim"]]["alive"] = false
+            if ball_holder == capture["victim"]:
+                ball_holder = selected
+            _move_selected(cell)
+            if not _captures(selected).is_empty():
+                message = "Продолжай съедение той же фишкой"
+                queue_redraw()
+            else:
+                _finish_turn()
             return
-    if _team_has_capture(turn):
-        status.text = "Съедение обязательно"
+    if _team_must_capture(turn):
+        message = "Съедение обязательно"
+        queue_redraw()
         return
-    var dr: int = cell.x - p["cell"].x
-    var dc: int = abs(cell.y - p["cell"].y)
+    var from: Vector2i = pieces[selected]["cell"]
+    var dr := cell.x - from.x
+    var dc := abs(cell.y - from.y)
     var forward := -1 if turn == 1 else 1
-    if dc == 1 and abs(dr) == 1 and (ball["holder"] != selected or dr == forward):
-        pieces[selected]["cell"] = cell
-        if ball["holder"] == selected:
-            ball["cell"] = cell
-        elif ball["holder"] < 0 and ball["cell"] == cell:
-            ball["holder"] = selected
-        if _check_goal(selected):
-            return
-        _end_turn()
+    if abs(dr) == 1 and dc == 1 and clicked == -1 and (ball_holder != selected or dr == forward):
+        _move_selected(cell)
+        if not _check_goal():
+            _finish_turn()
     else:
-        status.text = "Ходи на одну клетку по диагонали"
+        message = "Ходить можно на одну клетку по диагонали"
+        queue_redraw()
 
-func _check_goal(i: int) -> bool:
-    if ball["holder"] != i:
+func _move_selected(cell: Vector2i) -> void:
+    pieces[selected]["cell"] = cell
+    if ball_holder == selected:
+        ball_cell = cell
+    elif ball_holder == -1 and ball_cell == cell:
+        ball_holder = selected
+    queue_redraw()
+
+func _check_goal() -> bool:
+    if ball_holder != selected:
         return false
-    var p: Dictionary = pieces[i]
-    var goal_row := 0 if p["team"] == 1 else 9
-    if p["cell"].x == goal_row and p["cell"].y >= 2 and p["cell"].y <= 5:
-        scores[p["team"] - 1] += 1
-        if scores[p["team"] - 1] >= 3:
-            game_over = true
-            status.text = "Команда %d победила матч!" % p["team"]
-            _render()
+    var cell: Vector2i = pieces[selected]["cell"]
+    var goal_row := 0 if turn == 1 else 9
+    if cell.x == goal_row and cell.y >= 2 and cell.y <= 5:
+        scores[turn - 1] += 1
+        if scores[turn - 1] >= 3:
+            message = "Победа голубых!" if turn == 1 else "Победа красных!"
+            selected = -1
+            queue_redraw()
         else:
-            _reset_rally()
-            status.text = "ГОЛ! Новый розыгрыш"
+            _reset_board()
+            message = "ГОЛ! %d : %d — ход голубых" % [scores[0], scores[1]]
+            queue_redraw()
         return true
     return false
 
-func _end_turn() -> void:
+func _finish_turn() -> void:
     selected = -1
     turn = 2 if turn == 1 else 1
-    status.text = "Ход синих" if turn == 1 else "Ход красных"
-    _render()
+    message = "Ход голубых" if turn == 1 else "Ход красных"
+    queue_redraw()
 
-func _render() -> void:
-    score_label.text = "%d : %d" % [scores[0], scores[1]]
-    for r in range(ROWS):
-        for c in range(COLS):
-            var idx := r * COLS + c
-            var b: Button = cells[idx]
-            var cell := Vector2i(r, c)
-            b.text = ""
-            b.modulate = Color("566d60") if (r + c) % 2 == 0 else Color("253c30")
-            if (r == 0 or r == 9) and c >= 2 and c <= 5:
-                b.modulate = Color("547a98")
-            var pi := _piece_at(cell)
-            if pi >= 0:
-                var p: Dictionary = pieces[pi]
-                b.text = ("🔵" if p["team"] == 1 else "🔴") + ("★" if p["hero"] else "")
-                if pi == selected:
-                    b.modulate = Color("a3c76b")
-            if ball["holder"] < 0 and ball["cell"] == cell:
-                b.text += "⚽"
-            elif pi >= 0 and ball["holder"] == pi:
-                b.text += "⚽"
+func _draw() -> void:
+    var geometry := _geometry()
+    var side: float = geometry["cell_size"]
+    var offset: Vector2 = geometry["offset"]
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#14111b"))
+    var font: Font = ThemeDB.fallback_font
+    draw_string(font, Vector2(18, 29), "MONSTER BALL    %d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
+    draw_string(font, Vector2(18, 57), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+    for row in ROWS:
+        for col in COLS:
+            var rect := Rect2(offset + Vector2(col, row) * side, Vector2.ONE * side)
+            draw_rect(rect, Color("#30243f") if (row + col) % 2 == 0 else Color("#665174"))
+    for i in pieces.size():
+        if not pieces[i]["alive"]:
+            continue
+        var cell: Vector2i = pieces[i]["cell"]
+        var center := offset + Vector2(cell.y + 0.5, cell.x + 0.5) * side
+        if i == selected:
+            draw_rect(Rect2(offset + Vector2(cell.y, cell.x) * side, Vector2.ONE * side), Color("#a4c886"), false, 4.0)
+        draw_circle(center, side * 0.32, BLUE if pieces[i]["team"] == 1 else RED)
+        if ball_holder == i:
+            draw_circle(center, side * 0.13, BALL)
+    if ball_holder == -1:
+        draw_circle(offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side, side * 0.18, BALL)
+    draw_string(font, Vector2(18, size.y - 24), "Нажми фишку, затем диагональную клетку", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#dddddd"))
