@@ -120,6 +120,7 @@ func _confirmation_tap(point: Vector2) -> void:
 
 # Touch/mouse drag: the board piece follows the pointer; release validates the move.
 var drag_active: bool = false
+var drag_input_touch: bool = false
 var drag_moved: bool = false
 var drag_pointer: Vector2 = Vector2.ZERO
 var drag_origin: Vector2i = Vector2i(-1, -1)
@@ -139,52 +140,97 @@ func _halloween_pumpkin(center: Vector2, radius: float) -> void:
     draw_line(center + Vector2(-radius * 0.58,radius * 0.27), center + Vector2(radius * 0.56,radius * 0.30), ink, maxf(1.5, radius * 0.18))
     draw_circle(center + Vector2(radius * 0.50,-radius * 0.68), radius * 0.21, Color("#ffbb50", 0.45))
 
+# Halloween decorations are vector-drawn so the GitHub upload needs only two scripts.
+func _halloween_ghost(center: Vector2, radius: float, seed: float) -> void:
+    var wobble: float = sin(magic_clock * 1.5 + seed) * radius * 0.16
+    var p: Vector2 = center + Vector2(0, wobble)
+    var aura: Color = Color("#90e8e4", 0.13)
+    draw_circle(p, radius * 1.55, aura)
+    draw_circle(p + Vector2(0, -radius * 0.27), radius * 0.87, Color("#c7fff4", 0.87))
+    draw_colored_polygon(PackedVector2Array([
+        p + Vector2(-radius * 0.88, -radius * 0.20),
+        p + Vector2(radius * 0.87, -radius * 0.20),
+        p + Vector2(radius * 0.95, radius * 0.75),
+        p + Vector2(radius * 0.48, radius * 0.44),
+        p + Vector2(0, radius * 0.91),
+        p + Vector2(-radius * 0.50, radius * 0.47),
+        p + Vector2(-radius * 0.95, radius * 0.75)
+    ]), Color("#bff6e9", 0.82))
+    draw_circle(p + Vector2(-radius * 0.30, -radius * 0.25), maxf(1.2, radius * 0.13), Color("#12243a"))
+    draw_circle(p + Vector2(radius * 0.30, -radius * 0.25), maxf(1.2, radius * 0.13), Color("#12243a"))
+
+func _halloween_grave(center: Vector2, scale: float) -> void:
+    var w: float = 14.0 * scale
+    var h: float = 17.0 * scale
+    var r := Rect2(center - Vector2(w * 0.5, h), Vector2(w, h))
+    draw_rect(Rect2(r.position + Vector2(1, 3), r.size), Color("#080b16", 0.75))
+    draw_rect(r, Color("#586273"))
+    draw_circle(Vector2(center.x, r.position.y), w * 0.5, Color("#7d8090"))
+    draw_line(Vector2(center.x, r.position.y - w * 0.27), Vector2(center.x, r.position.y + w * 0.28), Color("#232b3c"), 2.0)
+    draw_line(Vector2(center.x - w * 0.23, r.position.y), Vector2(center.x + w * 0.23, r.position.y), Color("#232b3c"), 2.0)
+
 func _halloween_arena(origin: Vector2, board_extent: Vector2) -> void:
-    # Moonlit purple sky and distant graveyard silhouettes.
     draw_rect(Rect2(Vector2.ZERO, size), Color("#100d1d"))
-    var sky_base: float = maxf(95.0, origin.y - 10.0)
-    draw_rect(Rect2(Vector2(0, 71), Vector2(size.x, maxf(10.0, sky_base - 71.0))), Color("#22132e"))
-    var moon: Vector2 = Vector2(size.x * 0.78, maxf(94.0, origin.y - 70.0))
-    draw_circle(moon, 34.0, Color("#ffe9ae", 0.10))
-    draw_circle(moon, 25.0, Color("#f0d9ae", 0.26))
-    draw_circle(moon, 19.0, Color("#f5dbb0", 0.82))
+    var board_end: float = origin.y + board_extent.y
+    var sky_base: float = maxf(125.0, origin.y - 12.0)
+    draw_rect(Rect2(Vector2(0, 88), Vector2(size.x, maxf(12.0, sky_base - 88.0))), Color("#251632"))
+    var moon: Vector2 = Vector2(size.x * 0.78, maxf(111.0, origin.y - 88.0))
+    draw_circle(moon, 43.0, Color("#ffe6b2", 0.09))
+    draw_circle(moon, 29.0, Color("#f9dbb3", 0.23))
+    draw_circle(moon, 21.0, Color("#ffe6bd", 0.93))
+    # Gothic village and castle towers in the distance.
     for i in 12:
-        var x: float = float(i) * size.x / 11.0 - 8.0
-        var tower_height: float = float(16 + (i * 17) % 28)
-        var width: float = 15.0 + float(i % 3) * 4.0
-        var tower_top: float = sky_base - tower_height
-        draw_rect(Rect2(x, tower_top, width, tower_height + 9.0), Color("#0b101d"))
-        draw_colored_polygon(PackedVector2Array([Vector2(x - 3, tower_top), Vector2(x + width * 0.5, tower_top - 17.0), Vector2(x + width + 3, tower_top)]), Color("#0b101d"))
+        var x: float = float(i) * size.x / 11.0 - 10.0
+        var h: float = 17.0 + float((i * 19) % 33)
+        var width: float = 18.0 + float(i % 3) * 3.0
+        var peak: float = sky_base - h
+        draw_rect(Rect2(x, peak, width, h + 14.0), Color("#10101f"))
+        draw_colored_polygon(PackedVector2Array([Vector2(x - 3, peak), Vector2(x + width * 0.5, peak - 15), Vector2(x + width + 3, peak)]), Color("#10101f"))
         if i % 3 != 1:
-            draw_rect(Rect2(x + width * 0.42, tower_top + 9.0, 3.0, 6.0), Color("#ff9335", 0.73))
-    # Tiny flying bats above the stands.
+            draw_rect(Rect2(x + width * 0.42, peak + 9, 3, 7), Color("#ffa456", 0.84))
+    # Silhouetted flying bats.
     for i in 5:
-        var bx: float = 19.0 + float(i) * (size.x - 43.0) / 5.0
-        var by: float = maxf(91.0, origin.y - 53.0) - float((i * 13) % 26)
-        var wing: float = 4.0 + float(i % 3)
-        draw_line(Vector2(bx - wing, by - 2), Vector2(bx, by + 1), Color("#040710"), 2.0)
-        draw_line(Vector2(bx, by + 1), Vector2(bx + wing, by - 2), Color("#040710"), 2.0)
-    # Stone pedestal: a visible left rim, right rim and deep front face.
-    var low: float = minf(14.0, maxf(6.0, board_extent.x * 0.025))
-    var back := Rect2(origin - Vector2(9.0, 9.0), board_extent + Vector2(18.0, 18.0))
-    draw_rect(back.grow(4.0), Color("#05050d"))
-    draw_colored_polygon(PackedVector2Array([Vector2(back.position.x, back.end.y), Vector2(back.end.x, back.end.y), Vector2(back.end.x - 5.0, back.end.y + low), Vector2(back.position.x + 6.0, back.end.y + low)]), Color("#482f39"))
-    draw_line(Vector2(back.position.x + 6.0, back.end.y + low), Vector2(back.end.x - 5.0, back.end.y + low), Color("#b66535"), 2.0)
-    draw_rect(back, Color("#251629"))
-    draw_rect(back, Color("#d18447"), false, 4.0)
-    # Graveyard spectators outside the playing surface.
+        var x: float = 19.0 + float(i) * (size.x - 43.0) / 5.0
+        var y: float = maxf(106.0, origin.y - 89.0) - float((i * 11) % 23)
+        var wing: float = 5.0 + float(i % 3)
+        draw_line(Vector2(x - wing, y - 3), Vector2(x, y + 1), Color("#050611"), 2.2)
+        draw_line(Vector2(x, y + 1), Vector2(x + wing, y - 3), Color("#050611"), 2.2)
+    # Bright supernatural spectator stands ABOVE and BELOW the game board.
+    var upper: float = origin.y - 54.0
+    if upper >= 155.0:
+        draw_rect(Rect2(7.0, upper - 28.0, size.x - 14.0, 50.0), Color("#181729", 0.90))
+        draw_line(Vector2(8, upper + 25), Vector2(size.x - 8, upper + 25), Color("#bd7240"), 3.0)
+        for i in 8:
+            var x: float = 24.0 + (float(i) + 0.18) * (size.x - 48.0) / 8.0
+            _halloween_ghost(Vector2(x, upper - 2.0 + float(i % 2) * 9.0), 9.0 + float(i % 3), float(i) * 1.3)
+        _halloween_pumpkin(Vector2(17, upper + 24), 11.0)
+        _halloween_pumpkin(Vector2(size.x - 17, upper + 24), 11.0)
+    var lower: float = board_end + 47.0
+    if lower + 26.0 < size.y - 73.0:
+        draw_rect(Rect2(5.0, lower - 25.0, size.x - 10.0, 53.0), Color("#1e1928", 0.92))
+        draw_line(Vector2(6, lower - 25), Vector2(size.x - 6, lower - 25), Color("#ad6b4b"), 3.0)
+        for i in 7:
+            var x: float = 24.0 + (float(i) + 0.1) * (size.x - 48.0) / 7.0
+            if i % 3 == 0:
+                _halloween_grave(Vector2(x, lower + 18), 1.12)
+            else:
+                _halloween_ghost(Vector2(x, lower - 2.0), 10.5, float(i) * 0.92 + 9.0)
+        _halloween_pumpkin(Vector2(25, lower + 18), 13.0)
+        _halloween_pumpkin(Vector2(size.x - 26, lower + 18), 13.0)
+    # Thick raised stone platform, with a visible front bevel (pseudo-3D).
+    var depth: float = minf(14.0, maxf(7.0, board_extent.x * 0.032))
+    var back := Rect2(origin - Vector2(9, 9), board_extent + Vector2(18, 18))
+    draw_rect(back.grow(4.0), Color("#06060f"))
+    draw_colored_polygon(PackedVector2Array([Vector2(back.position.x, back.end.y), Vector2(back.end.x, back.end.y), Vector2(back.end.x - 5, back.end.y + depth), Vector2(back.position.x + 6, back.end.y + depth)]), Color("#70403d"))
+    draw_line(Vector2(back.position.x + 6, back.end.y + depth), Vector2(back.end.x - 5, back.end.y + depth), Color("#f5a650"), 2.0)
+    draw_rect(back, Color("#24172e"))
+    draw_rect(back, Color("#dd9c57"), false, 4.0)
+    # Side spectators: larger than before, glowing on both sides.
     for side_id in 2:
-        var xx: float = origin.x - 15.0 if side_id == 0 else origin.x + board_extent.x + 15.0
-        for j in 9:
-            var yy: float = origin.y + (float(j) + 0.5) * board_extent.y / 9.0
-            var alpha: float = 0.36 + 0.16 * sin(magic_clock * 1.6 + float(j) * 1.4)
-            draw_circle(Vector2(xx, yy), 4.4, Color("#a3e5dc", alpha * 0.55))
-            draw_circle(Vector2(xx, yy - 3.8), 3.0, Color("#ddfff1", alpha))
-            draw_circle(Vector2(xx - 1.1, yy - 4.2), 0.55, Color("#25213b"))
-            draw_circle(Vector2(xx + 1.1, yy - 4.2), 0.55, Color("#25213b"))
-    # Lantern-lit pumpkins above the arena; procedural, no PNG dependencies.
-    _halloween_pumpkin(Vector2(maxf(17.0, origin.x + 3.0), origin.y - 27.0), 9.0)
-    _halloween_pumpkin(Vector2(minf(size.x - 17.0, origin.x + board_extent.x - 3.0), origin.y - 27.0), 9.0)
+        var xx: float = origin.x - 17.0 if side_id == 0 else origin.x + board_extent.x + 17.0
+        for j in 8:
+            var yy: float = origin.y + (float(j) + 0.5) * board_extent.y / 8.0
+            _halloween_ghost(Vector2(xx, yy), 6.2, float(j) + float(side_id) * 2.4)
 
 func _magic_ring(center: Vector2, radius: float, hue: Color, strong: bool = false) -> void:
     var wave: float = 0.5 + 0.5 * sin(magic_clock * 5.0)
@@ -211,10 +257,12 @@ func _drag_event(event: InputEvent) -> bool:
         point = event.position
         moving = true
     elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+        if drag_active and drag_input_touch: return true
         point = event.position
         pressed = event.pressed
         released = not event.pressed
     elif event is InputEventMouseMotion and drag_active and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+        if drag_input_touch: return true
         point = event.position
         moving = true
     else:
@@ -229,12 +277,20 @@ func _drag_event(event: InputEvent) -> bool:
     if released:
         if drag_active:
             drag_active = false
+            drag_input_touch = false
             var old: Vector2i = drag_origin
             drag_origin = Vector2i(-1, -1)
             if drag_moved:
                 var target: Vector2i = _drag_point_to_cell(point)
                 if _valid_drop(target) and target != old:
+                    var carried_piece: int = selected
                     _tap(target)
+                    # Drop/impact only; do not animate a second trip from the source.
+                    if carried_piece >= 0 and fx_piece == carried_piece and fx_to == target and fx_progress < 1.0:
+                        if pieces[carried_piece]["alive"] and pieces[carried_piece]["cell"] == target:
+                            fx_from = target
+                            fx_duration = 0.20
+                            fx_progress = 0.0
                 else:
                     fx_bounce_from = _drag_cell_center(old)
                     fx_bounce_start = point
@@ -247,6 +303,7 @@ func _drag_event(event: InputEvent) -> bool:
         var cell: Vector2i = _drag_point_to_cell(point)
         if _drag_cell_valid(cell) and _drag_is_own_piece(cell):
             drag_active = true
+            drag_input_touch = event is InputEventScreenTouch
             drag_moved = false
             drag_origin = cell
             drag_pointer = point
@@ -289,6 +346,25 @@ func _drag_is_own_piece(cell: Vector2i) -> bool:
 
 func _drag_can_start(point: Vector2) -> bool:
     return not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
+
+func _draw_drag_piece_overlay(side: float) -> void:
+    if not drag_active or not drag_moved or selected < 0 or selected >= pieces.size():
+        return
+    if not bool(pieces[selected]["alive"]):
+        return
+    var center: Vector2 = drag_pointer
+    draw_circle(center + Vector2(0, side * 0.17), side * 0.43, Color("#05040d", 0.60))
+    draw_arc(center, side * 0.46, 0, TAU, 40, Color("#ffa74e", 0.83), 2.6)
+    var team: int = int(pieces[selected]["team"])
+    var key: String = BLUE_SKINS[piece_skins[selected]] if team == 1 else RED_SKINS[piece_skins[selected]]
+    var token_side: float = side * 0.93
+    if not _draw_asset(key, Rect2(center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
+        _draw_fantasy_token(center, side * 0.37, team, selected)
+    if ball_holder == selected:
+        var pumpkin_center: Vector2 = center + Vector2(side * 0.17, -side * 0.20)
+        var pumpkin_size: float = side * 0.50
+        if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
+            _draw_ghost_pumpkin(pumpkin_center, side * 0.16)
 
 func _draw_drag_hints() -> void:
     if selected < 0 or selected >= pieces.size(): return
@@ -770,9 +846,9 @@ func _draw() -> void:
             token_center = _drag_cell_center(fx_from).lerp(_drag_cell_center(fx_to), eased)
             token_center.y -= sin(fx_progress * PI) * side * 0.035
         if drag_active and drag_moved and cell == drag_origin:
-            token_center = drag_pointer
+            continue
         if not _draw_asset(key, Rect2(token_center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
-            _draw_fantasy_token(center, side * 0.37, team, i)
+            _draw_fantasy_token(token_center, side * 0.37, team, i)
         if ball_holder == i:
             var pumpkin_center := token_center + Vector2(side * 0.17, -side * 0.20)
             var pumpkin_size := side * 0.50
@@ -785,6 +861,7 @@ func _draw() -> void:
             _draw_ghost_pumpkin(pumpkin_center, side * 0.23)
     _draw_drag_hints()
     _draw_game_fx()
+    _draw_drag_piece_overlay(side)
     _draw_bottom_actions()
     if game_over:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
