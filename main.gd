@@ -162,7 +162,7 @@ func _tap(cell: Vector2i) -> void:
         return
     var from: Vector2i = pieces[selected]["cell"]
     var dr := cell.x - from.x
-    var dc := abs(cell.y - from.y)
+    var dc: int = absi(cell.y - from.y)
     var forward := -1 if turn == 1 else 1
     if abs(dr) == 1 and dc == 1 and clicked == -1 and (ball_holder != selected or dr == forward):
         _move_selected(cell)
@@ -334,7 +334,7 @@ func _draw() -> void:
     # Glowing goal frames are BEHIND the pieces, outside the pitch.
     var goal_left := offset.x + 2.0 * side
     var goal_right := offset.x + 6.0 * side
-    var goal_depth := min(12.0, side * 0.15)
+    var goal_depth: float = minf(12.0, side * 0.15)
     for edge_y in [offset.y, offset.y + board_size.y]:
         var sign_dir := -1.0 if edge_y == offset.y else 1.0
         var a := Vector2(goal_left, edge_y)
@@ -354,7 +354,7 @@ func _draw() -> void:
         if i == selected:
             draw_rect(Rect2(offset + Vector2(cell.y, cell.x) * side, Vector2.ONE * side), Color("#7ff9e2"), false, 3.0)
         var team: int = pieces[i]["team"]
-        var key := ["blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf"][i % 4] if team == 1 else ["red_skull", "red_orc", "red_goblin", "red_vampire"][i % 4]
+        var key: String = ["blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf"][i % 4] if team == 1 else ["red_skull", "red_orc", "red_goblin", "red_vampire"][i % 4]
         var token_side := side * 0.93
         if not _draw_asset(key, Rect2(center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
             _draw_fantasy_token(center, side * 0.37, team, i)
