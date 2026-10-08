@@ -233,8 +233,6 @@ var fx_bounce_time: float = 0.0
 var fx_bounce_cell: Vector2i = Vector2i(-1, -1)
 var fx_bounce_start: Vector2 = Vector2.ZERO
 var fx_bounce_data: Dictionary = {}
-var fx_bounce_start: Vector2 = Vector2.ZERO
-var fx_bounce_data: Dictionary = {}
 
 func _start_move_fx(source: Vector2i, target: Vector2i, captured: Vector2i, data: Dictionary) -> void:
     fx_source = source

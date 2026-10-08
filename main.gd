@@ -257,8 +257,6 @@ var fx_impact_time: float = 0.0
 var fx_bounce_from: Vector2 = Vector2.ZERO
 var fx_bounce_start: Vector2 = Vector2.ZERO
 var fx_bounce_piece: int = -1
-var fx_bounce_start: Vector2 = Vector2.ZERO
-var fx_bounce_piece: int = -1
 var fx_bounce_time: float = 0.0
 
 func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void:
