@@ -113,11 +113,15 @@ func _gui_input(event: InputEvent) -> void:
     if customization_open:
         _customization_tap(point)
         return
-    if point.y >= 72.0 and point.y <= 116.0:
-        customization_open = true
-        customization_team = 1
-        customization_slot = 0
-        queue_redraw()
+    # The two menu buttons share a row: decide by X before opening either.
+    if point.y >= 74.0 and point.y <= 116.0:
+        if point.x >= size.x * 0.60:
+            get_tree().change_scene_to_file("res://checkers.tscn")
+        else:
+            customization_open = true
+            customization_team = 1
+            customization_slot = 0
+            queue_redraw()
         return
     # Tap the mode tabs at the top, or the restart button at the bottom.
     if point.y < 70.0:
@@ -128,9 +132,6 @@ func _gui_input(event: InputEvent) -> void:
         scores = [0, 0]
         _reset_board()
         queue_redraw()
-        return
-    if point.y >= 77.0 and point.y <= 120.0 and point.x >= size.x * 0.60:
-        get_tree().change_scene_to_file("res://checkers.tscn")
         return
     if point.y > size.y - 57.0:
         scores = [0, 0]
@@ -155,7 +156,7 @@ func _customization_tap(point: Vector2) -> void:
         customization_slot = 0
     elif point.y < 245.0:
         customization_slot = clampi(int(point.x / maxf(1.0, size.x / 4.0)), 0, 3)
-    elif point.y < 360.0:
+    elif point.y >= 255.0 and point.y <= 265.0 + size.x / 4.0:
         var skin: int = clampi(int(point.x / maxf(1.0, size.x / 4.0)), 0, 3)
         piece_skins[(customization_team - 1) * 4 + customization_slot] = skin
     queue_redraw()
