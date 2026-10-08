@@ -42,6 +42,13 @@ func _setup_game_audio() -> void:
         var audio_path: String = "res://audio/%s.wav" % sound_name
         if ResourceLoader.exists(audio_path):
             sound_library[sound_name] = load(audio_path)
+    # Prefer real, long field recordings if available. Keep existing effects intact.
+    for track_name in ["stadium_crowd", "arena_ambience", "goal_crowd"]:
+        for extension in ["ogg", "mp3"]:
+            var alternate: String = "res://audio/%s.%s" % [track_name, extension]
+            if ResourceLoader.exists(alternate):
+                sound_library[track_name] = load(alternate)
+                break
     arena_music = AudioStreamPlayer.new()
     arena_music.name = "HalloweenAmbience"
     add_child(arena_music)
@@ -57,15 +64,16 @@ func _setup_game_audio() -> void:
     crowd_ambience = AudioStreamPlayer.new()
     crowd_ambience.name = "HalloweenCrowdBackground"
     add_child(crowd_ambience)
-    if sound_library.has("crowd"):
-        # The regular crowd effect remains a short one-shot at goal time.
-        var original_crowd: AudioStreamWAV = sound_library["crowd"] as AudioStreamWAV
+    var crowd_key: String = "stadium_crowd" if sound_library.has("stadium_crowd") else "crowd"
+    if sound_library.has(crowd_key):
+        # Real stadium recordings are long ambient loops; WAV is a fallback.
+        var original_crowd: AudioStreamWAV = sound_library[crowd_key] as AudioStreamWAV
         if original_crowd != null:
             var crowd_copy: AudioStreamWAV = original_crowd.duplicate() as AudioStreamWAV
             crowd_copy.loop_mode = AudioStreamWAV.LOOP_DISABLED
             crowd_ambience.stream = crowd_copy
         else:
-            crowd_ambience.stream = sound_library["crowd"]
+            crowd_ambience.stream = sound_library[crowd_key]
         crowd_ambience.finished.connect(_restart_crowd_ambience)
     _refresh_background_volumes()
 
@@ -81,7 +89,8 @@ func _refresh_background_volumes() -> void:
             arena_music.stop()
     if crowd_ambience != null:
         # The original crowd WAV is quiet; do not attenuate it again.
-        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * 1.10))
+        var crowd_balance: float = 0.53 if sound_library.has("stadium_crowd") else 1.10
+        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * crowd_balance))
         if muted or crowd_volume <= 0.005:
             crowd_ambience.stop()
 
@@ -121,7 +130,7 @@ func _play_sfx(sound_name: String, channel: String = "effects") -> void:
         return
     var player: AudioStreamPlayer = AudioStreamPlayer.new()
     add_child(player)
-    player.stream = sound_library[sound_name]
+    player.stream = sound_library["goal_crowd"] if sound_name == "crowd" and sound_library.has("goal_crowd") else sound_library[sound_name]
     player.volume_db = linear_to_db(maxf(0.001, v * (0.68 if channel == "crowd" else 0.85)))
     player.finished.connect(func(): player.queue_free())
     player.play()
@@ -1089,42 +1098,155 @@ func _schedule_bot() -> void:
     bot_pending = true
     _bot_move.call_deferred()
 
-func _evaluate_bot_checkers(source: Vector2i, target: Vector2i, victim: Vector2i, level: int) -> int:
-    var original_from: Dictionary = _piece(source).duplicate()
-    var original_to: Dictionary = _piece(target).duplicate()
-    var original_victim: Dictionary = {}
-    if victim.x >= 0:
-        original_victim = _piece(victim).duplicate()
-    board[source.x][source.y] = {"team": 0, "king": false}
-    board[target.x][target.y] = original_from.duplicate()
-    if victim.x >= 0:
-        board[victim.x][victim.y] = {"team": 0, "king": false}
-    var danger: int = 0
-    var enemy_captures: int = 0
+# AI 2.0: real look-ahead on the current board, including forced captures.
+# Scores are always from the red bot's point of view.
+var _ai_checkers_nodes: int = 0
+
+func _ai_checkers_value() -> int:
+    var value: int = 0
+    var reds: int = 0
+    var blues: int = 0
     for r in N:
         for c in N:
-            var at := Vector2i(r, c)
-            if _piece(at)["team"] != 1:
+            var d: Dictionary = board[r][c]
+            var team_id: int = int(d["team"])
+            if team_id == 0:
                 continue
-            for move in _captures(at):
-                enemy_captures += 1
-                if move["taken"] == target:
-                    danger += 1
-    var score: int = -danger * (130 if level == 2 else 65)
-    score -= mini(enemy_captures, 4) * (9 if level == 2 else 3)
-    if original_from["king"]:
-        score += 12
-    elif target.x == 7:
-        score += 100
-    if level == 2:
-        score += 10 - absi(target.y - 3) * 3
-        if victim.x >= 0:
-            score += 45
-    board[source.x][source.y] = original_from
-    board[target.x][target.y] = original_to
-    if victim.x >= 0:
-        board[victim.x][victim.y] = original_victim
-    return score
+            var sign: int = 1 if team_id == 2 else -1
+            if team_id == 2:
+                reds += 1
+            else:
+                blues += 1
+            var rank: int = r if team_id == 2 else 7 - r
+            var center: int = 3 - mini(absi(c - 3), 3)
+            value += sign * (280 if bool(d["king"]) else 100 + rank * 5 + center * 3)
+    if blues == 0:
+        return 50000
+    if reds == 0:
+        return -50000
+    return value
+
+func _ai_checkers_options(team_id: int, only_piece: Vector2i = Vector2i(-1, -1)) -> Array[Dictionary]:
+    var capture_list: Array[Dictionary] = []
+    var quiet_list: Array[Dictionary] = []
+    for r in N:
+        for c in N:
+            var from := Vector2i(r, c)
+            if only_piece.x >= 0 and from != only_piece:
+                continue
+            if int(_piece(from)["team"]) != team_id:
+                continue
+            for move in _captures(from):
+                capture_list.append({"from":from, "to":move["to"], "taken":move["taken"]})
+            if only_piece.x < 0:
+                for move in _moves(from):
+                    quiet_list.append({"from":from, "to":move["to"], "taken":Vector2i(-1,-1)})
+    if not capture_list.is_empty():
+        return capture_list
+    if only_piece.x >= 0:
+        return []
+    return quiet_list
+
+func _ai_checkers_quick(action: Dictionary, side: int) -> int:
+    var from: Vector2i = action["from"]
+    var dest: Vector2i = action["to"]
+    var captured: Vector2i = action["taken"]
+    var bonus: int = 0
+    if captured.x >= 0:
+        bonus += 175 if bool(_piece(captured)["king"]) else 95
+    if not bool(_piece(from)["king"]):
+        if (side == 2 and dest.x == 7) or (side == 1 and dest.x == 0):
+            bonus += 220
+    bonus += 8 - absi(dest.y - 3) * 2
+    return bonus
+
+func _ai_checkers_search(side: int, plies: int, forced_piece: Vector2i, alpha: int, beta: int) -> int:
+    _ai_checkers_nodes += 1
+    # A hard limit keeps Legend responsive even with many flying kings.
+    if _ai_checkers_nodes > 2400:
+        return _ai_checkers_value()
+    if plies <= 0 and forced_piece.x < 0:
+        return _ai_checkers_value()
+    var options: Array[Dictionary] = _ai_checkers_options(side, forced_piece)
+    if options.is_empty():
+        if forced_piece.x >= 0:
+            return _ai_checkers_search(3 - side, plies - 1, Vector2i(-1,-1), alpha, beta)
+        return -40000 - plies if side == 2 else 40000 + plies
+    options.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+        return _ai_checkers_quick(a, side) > _ai_checkers_quick(b, side)
+    )
+    var best: int = -60000 if side == 2 else 60000
+    var limit: int = mini(options.size(), 12)
+    for k in limit:
+        var action: Dictionary = options[k]
+        var src: Vector2i = action["from"]
+        var dst: Vector2i = action["to"]
+        var hit: Vector2i = action["taken"]
+        var saved_from: Dictionary = _piece(src).duplicate()
+        var saved_to: Dictionary = _piece(dst).duplicate()
+        var saved_hit: Dictionary = {}
+        if hit.x >= 0:
+            saved_hit = _piece(hit).duplicate()
+            board[hit.x][hit.y] = {"team":0, "king":false}
+        board[src.x][src.y] = {"team":0, "king":false}
+        board[dst.x][dst.y] = saved_from.duplicate()
+        var promoted: bool = not bool(saved_from["king"]) and ((side == 2 and dst.x == 7) or (side == 1 and dst.x == 0))
+        if promoted:
+            board[dst.x][dst.y]["king"] = true
+        var next_forced := Vector2i(-1,-1)
+        var next_side: int = 3 - side
+        var next_depth: int = plies - 1
+        if hit.x >= 0 and not promoted and not _captures(dst).is_empty():
+            next_forced = dst
+            next_side = side
+            next_depth = plies
+        var result: int = _ai_checkers_search(next_side, next_depth, next_forced, alpha, beta)
+        board[src.x][src.y] = saved_from
+        board[dst.x][dst.y] = saved_to
+        if hit.x >= 0:
+            board[hit.x][hit.y] = saved_hit
+        if side == 2:
+            best = maxi(best, result)
+            alpha = maxi(alpha, best)
+        else:
+            best = mini(best, result)
+            beta = mini(beta, best)
+        if beta <= alpha:
+            break
+    return best
+
+func _ai_choose_checkers_action(options: Array[Dictionary], depth: int) -> Dictionary:
+    _ai_checkers_nodes = 0
+    var best_action: Dictionary = options[0]
+    var best_score: int = -999999
+    options.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+        return _ai_checkers_quick(a, 2) > _ai_checkers_quick(b, 2)
+    )
+    for action in options:
+        var src: Vector2i = action["from"]
+        var dst: Vector2i = action["to"]
+        var hit: Vector2i = action["taken"]
+        var saved_from: Dictionary = _piece(src).duplicate()
+        var saved_to: Dictionary = _piece(dst).duplicate()
+        var saved_hit: Dictionary = {}
+        if hit.x >= 0:
+            saved_hit = _piece(hit).duplicate()
+            board[hit.x][hit.y] = {"team":0, "king":false}
+        board[src.x][src.y] = {"team":0, "king":false}
+        board[dst.x][dst.y] = saved_from.duplicate()
+        var promoted: bool = not bool(saved_from["king"]) and dst.x == 7
+        if promoted:
+            board[dst.x][dst.y]["king"] = true
+        var chain: bool = hit.x >= 0 and not promoted and not _captures(dst).is_empty()
+        var score: int = _ai_checkers_search(2 if chain else 1, depth if chain else depth - 1, dst if chain else Vector2i(-1,-1), -60000, 60000)
+        board[src.x][src.y] = saved_from
+        board[dst.x][dst.y] = saved_to
+        if hit.x >= 0:
+            board[hit.x][hit.y] = saved_hit
+        if score > best_score:
+            best_score = score
+            best_action = action
+    return best_action
 
 func _bot_move() -> void:
     if not is_inside_tree():
@@ -1135,37 +1257,19 @@ func _bot_move() -> void:
     bot_pending = false
     if game_mode != 0 or turn != 2 or finished:
         return
-    var options: Array[Dictionary] = []
-    var must: bool = _must_capture(2)
-    for r in N:
-        for c in N:
-            var from := Vector2i(r, c)
-            if _piece(from)["team"] != 2:
-                continue
-            var candidates: Array = _captures(from)
-            if not must:
-                candidates.append_array(_moves(from))
-            for move in candidates:
-                var target: Vector2i = move["to"]
-                var victim: Vector2i = move["taken"]
-                var score: int = (100 if victim.x >= 0 else 0) + target.x * 3
-                if target.x == 7:
-                    score += 20
-                if bot_difficulty == 0:
-                    score = randi_range(0, 120)
-                else:
-                    score += _evaluate_bot_checkers(from, target, victim, bot_difficulty)
-                    if bot_difficulty == 1:
-                        score += randi_range(-12, 12)
-                options.append({"from": from, "to": target, "taken": victim, "score": score})
+    var options: Array[Dictionary] = _ai_checkers_options(2)
     if options.is_empty():
         finished = true
         winning_team = 1
         message = "ПОБЕДИЛИ СИНИЕ!"
         queue_redraw()
         return
-    options.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["score"]) > int(b["score"]))
-    var best: Dictionary = options[0]
+    var best: Dictionary
+    if bot_difficulty == 0:
+        best = options.pick_random()
+    else:
+        # Experienced: 2-ply; Legend: 4-ply with alpha-beta and capture chains.
+        best = _ai_choose_checkers_action(options, 2 if bot_difficulty == 1 else 4)
     var source: Vector2i = best["from"]
     var dest: Vector2i = best["to"]
     var captured: Vector2i = best["taken"]
@@ -1208,6 +1312,12 @@ func _bot_continue() -> void:
         queue_redraw()
         return
     var move: Dictionary = moves[0]
+    if bot_difficulty > 0 and moves.size() > 1:
+        var chain_choices: Array[Dictionary] = []
+        for item in moves:
+            chain_choices.append({"from":forced, "to":item["to"], "taken":item["taken"]})
+        var chosen: Dictionary = _ai_choose_checkers_action(chain_choices, 2 if bot_difficulty == 1 else 4)
+        move = {"to":chosen["to"], "taken":chosen["taken"]}
     var dest: Vector2i = move["to"]
     var victim: Vector2i = move["taken"]
     var data: Dictionary = _piece(forced).duplicate()

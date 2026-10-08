@@ -69,6 +69,13 @@ func _setup_game_audio() -> void:
         var audio_path: String = "res://audio/%s.wav" % sound_name
         if ResourceLoader.exists(audio_path):
             sound_library[sound_name] = load(audio_path)
+    # Prefer real, long field recordings if available. Keep existing effects intact.
+    for track_name in ["stadium_crowd", "arena_ambience", "goal_crowd"]:
+        for extension in ["ogg", "mp3"]:
+            var alternate: String = "res://audio/%s.%s" % [track_name, extension]
+            if ResourceLoader.exists(alternate):
+                sound_library[track_name] = load(alternate)
+                break
     arena_music = AudioStreamPlayer.new()
     arena_music.name = "HalloweenAmbience"
     add_child(arena_music)
@@ -84,15 +91,16 @@ func _setup_game_audio() -> void:
     crowd_ambience = AudioStreamPlayer.new()
     crowd_ambience.name = "HalloweenCrowdBackground"
     add_child(crowd_ambience)
-    if sound_library.has("crowd"):
-        # The regular crowd effect remains a short one-shot at goal time.
-        var original_crowd: AudioStreamWAV = sound_library["crowd"] as AudioStreamWAV
+    var crowd_key: String = "stadium_crowd" if sound_library.has("stadium_crowd") else "crowd"
+    if sound_library.has(crowd_key):
+        # Real stadium recordings are long ambient loops; WAV is a fallback.
+        var original_crowd: AudioStreamWAV = sound_library[crowd_key] as AudioStreamWAV
         if original_crowd != null:
             var crowd_copy: AudioStreamWAV = original_crowd.duplicate() as AudioStreamWAV
             crowd_copy.loop_mode = AudioStreamWAV.LOOP_DISABLED
             crowd_ambience.stream = crowd_copy
         else:
-            crowd_ambience.stream = sound_library["crowd"]
+            crowd_ambience.stream = sound_library[crowd_key]
         crowd_ambience.finished.connect(_restart_crowd_ambience)
     _refresh_background_volumes()
 
@@ -108,7 +116,8 @@ func _refresh_background_volumes() -> void:
             arena_music.stop()
     if crowd_ambience != null:
         # The original crowd WAV is quiet; do not attenuate it again.
-        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * 1.10))
+        var crowd_balance: float = 0.53 if sound_library.has("stadium_crowd") else 1.10
+        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * crowd_balance))
         if muted or crowd_volume <= 0.005:
             crowd_ambience.stop()
 
@@ -148,7 +157,7 @@ func _play_sfx(sound_name: String, channel: String = "effects") -> void:
         return
     var player: AudioStreamPlayer = AudioStreamPlayer.new()
     add_child(player)
-    player.stream = sound_library[sound_name]
+    player.stream = sound_library["goal_crowd"] if sound_name == "crowd" and sound_library.has("goal_crowd") else sound_library[sound_name]
     player.volume_db = linear_to_db(maxf(0.001, v * (0.68 if channel == "crowd" else 0.85)))
     player.finished.connect(func(): player.queue_free())
     player.play()
@@ -1147,32 +1156,186 @@ func _schedule_bot() -> void:
     bot_pending = true
     _bot_turn.call_deferred()
 
-func _football_bot_score(index: int, target: Vector2i, victim: int) -> int:
-    var value: int = 0
-    if ball_holder == index:
-        value += target.x * 9
-        if target.x == 9 and target.y >= 2 and target.y <= 5:
-            value += 500
-    elif ball_holder == -1:
-        value -= (absi(target.x - ball_cell.x) + absi(target.y - ball_cell.y)) * 8
-        if target == ball_cell:
-            value += 170
-    else:
-        var holder: int = ball_holder
-        if holder >= 0 and pieces[holder]["alive"]:
-            var enemy: Vector2i = pieces[holder]["cell"]
-            value -= (absi(target.x - enemy.x) + absi(target.y - enemy.y)) * 5
-    if victim >= 0:
-        value += 65
-    for j in pieces.size():
-        if not pieces[j]["alive"] or pieces[j]["team"] != 1 or j == victim:
+# AI 2.0: red attacks the bottom goal, blue attacks the top.
+# The search uses the real 5v5 rules, including forced jumps and diagonal passes.
+var _fb_ai_nodes: int = 0
+
+func _fb_ai_choices(side: int) -> Array[Dictionary]:
+    var forced_moves: Array[Dictionary] = []
+    var free_moves: Array[Dictionary] = []
+    for i in pieces.size():
+        if not bool(pieces[i]["alive"]) or int(pieces[i]["team"]) != side:
             continue
-        var enemy_cell: Vector2i = pieces[j]["cell"]
-        if absi(enemy_cell.x - target.x) == 1 and absi(enemy_cell.y - target.y) == 1:
-            var escape: Vector2i = target + (target - enemy_cell)
-            if _inside(escape) and _piece_at(escape) == -1:
-                value -= 55
+        var src: Vector2i = pieces[i]["cell"]
+        for capture in _captures(i):
+            forced_moves.append({"piece":i, "to":capture["cell"], "victim":capture["victim"]})
+        for dr in [-1, 1]:
+            if ball_holder == i and dr != (1 if side == 2 else -1):
+                continue
+            for dc in [-1, 1]:
+                var target: Vector2i = src + Vector2i(dr, dc)
+                if _inside(target) and _piece_at(target) < 0:
+                    free_moves.append({"piece":i, "to":target, "victim":-1})
+        if ball_holder == i:
+            for j in pieces.size():
+                if j == i or not bool(pieces[j]["alive"]) or int(pieces[j]["team"]) != side:
+                    continue
+                var dest: Vector2i = pieces[j]["cell"]
+                if absi(src.x - dest.x) == 1 and absi(src.y - dest.y) == 1:
+                    free_moves.append({"piece":i, "pass_to":j})
+    return forced_moves if not forced_moves.is_empty() else free_moves
+
+func _fb_ai_apply(move: Dictionary) -> void:
+    var mover: int = int(move["piece"])
+    if move.has("pass_to"):
+        ball_holder = int(move["pass_to"])
+        ball_cell = pieces[ball_holder]["cell"]
+        return
+    var victim: int = int(move["victim"])
+    if victim >= 0:
+        pieces[victim]["alive"] = false
+        if ball_holder == victim:
+            ball_holder = mover
+    pieces[mover]["cell"] = move["to"]
+    if ball_holder == mover:
+        ball_cell = move["to"]
+    elif ball_holder < 0 and ball_cell == move["to"]:
+        ball_holder = mover
+    # A capture chain is completed during the same turn.
+    if victim >= 0:
+        for unused in FOOTBALL_TEAM_SIZE:
+            var next_captures: Array = _captures(mover)
+            if next_captures.is_empty():
+                break
+            var chosen: Dictionary = next_captures[0]
+            for candidate in next_captures:
+                if int(candidate["victim"]) == ball_holder:
+                    chosen = candidate
+                    break
+            var next_victim: int = int(chosen["victim"])
+            pieces[next_victim]["alive"] = false
+            if ball_holder == next_victim:
+                ball_holder = mover
+            pieces[mover]["cell"] = chosen["cell"]
+            if ball_holder == mover:
+                ball_cell = chosen["cell"]
+            elif ball_holder < 0 and ball_cell == chosen["cell"]:
+                ball_holder = mover
+
+func _fb_ai_value() -> int:
+    var red_count: int = 0
+    var blue_count: int = 0
+    var value: int = 0
+    for i in pieces.size():
+        if not bool(pieces[i]["alive"]):
+            continue
+        var team_id: int = int(pieces[i]["team"])
+        var cell: Vector2i = pieces[i]["cell"]
+        var sign: int = 1 if team_id == 2 else -1
+        if team_id == 2:
+            red_count += 1
+        else:
+            blue_count += 1
+        # Value active pieces and space/position around the central lanes.
+        value += sign * (220 + (cell.x if team_id == 2 else 9 - cell.x) * 4 + (3 - mini(absi(cell.y - 3), 3)) * 5)
+        # A jump threat matters much more if the victim carries the ball.
+        for cap in _captures(i):
+            var opponent: int = int(cap["victim"])
+            value += sign * (220 if opponent == ball_holder else 34)
+    if red_count == 0:
+        return -50000
+    if blue_count == 0:
+        return 50000
+    if ball_holder >= 0 and bool(pieces[ball_holder]["alive"]):
+        var holder_side: int = int(pieces[ball_holder]["team"])
+        var pos: Vector2i = pieces[ball_holder]["cell"]
+        if pos.x == (9 if holder_side == 2 else 0) and pos.y >= 2 and pos.y <= 5:
+            return 50000 if holder_side == 2 else -50000
+        var sign: int = 1 if holder_side == 2 else -1
+        var progress: int = pos.x if holder_side == 2 else 9 - pos.x
+        value += sign * (170 + progress * 42 + (3 - mini(absi(pos.y - 3), 3)) * 14)
+        if (red_count == 1 and holder_side == 2) or (blue_count == 1 and holder_side == 1):
+            if not _carrier_has_move(ball_holder):
+                return -50000 if holder_side == 2 else 50000
+    else:
+        var red_nearest: int = 30
+        var blue_nearest: int = 30
+        for i in pieces.size():
+            if not bool(pieces[i]["alive"]):
+                continue
+            var cell: Vector2i = pieces[i]["cell"]
+            var distance: int = absi(cell.x - ball_cell.x) + absi(cell.y - ball_cell.y)
+            if int(pieces[i]["team"]) == 2:
+                red_nearest = mini(red_nearest, distance)
+            else:
+                blue_nearest = mini(blue_nearest, distance)
+        value += (blue_nearest - red_nearest) * 30
     return value
+
+func _fb_ai_search(side: int, depth: int, alpha: int, beta: int) -> int:
+    _fb_ai_nodes += 1
+    var static_score: int = _fb_ai_value()
+    if depth <= 0 or absi(static_score) >= 49000 or _fb_ai_nodes > 1600:
+        return static_score
+    var moves: Array[Dictionary] = _fb_ai_choices(side)
+    if moves.is_empty():
+        return -28000 if side == 2 else 28000
+    # Move ordering: look at promising tactical moves first, keep mobile fast.
+    var ranked: Array[Dictionary] = []
+    for move in moves:
+        var old_pieces: Array[Dictionary] = pieces
+        var old_holder: int = ball_holder
+        var old_cell: Vector2i = ball_cell
+        pieces = old_pieces.duplicate(true)
+        _fb_ai_apply(move)
+        var merit: int = _fb_ai_value()
+        pieces = old_pieces
+        ball_holder = old_holder
+        ball_cell = old_cell
+        ranked.append({"action":move, "merit":merit})
+    ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+        return int(a["merit"]) > int(b["merit"]) if side == 2 else int(a["merit"]) < int(b["merit"])
+    )
+    var best: int = -60000 if side == 2 else 60000
+    for k in mini(ranked.size(), 8):
+        var action: Dictionary = ranked[k]["action"]
+        var snapshot: Array[Dictionary] = pieces
+        var previous_holder: int = ball_holder
+        var previous_cell: Vector2i = ball_cell
+        pieces = snapshot.duplicate(true)
+        _fb_ai_apply(action)
+        var score: int = _fb_ai_search(3 - side, depth - 1, alpha, beta)
+        pieces = snapshot
+        ball_holder = previous_holder
+        ball_cell = previous_cell
+        if side == 2:
+            best = maxi(best, score)
+            alpha = maxi(alpha, best)
+        else:
+            best = mini(best, score)
+            beta = mini(beta, best)
+        if alpha >= beta:
+            break
+    return best
+
+func _fb_choose_action(moves: Array[Dictionary], depth: int) -> Dictionary:
+    _fb_ai_nodes = 0
+    var best: Dictionary = moves[0]
+    var best_score: int = -999999
+    for move in moves:
+        var snapshot: Array[Dictionary] = pieces
+        var previous_holder: int = ball_holder
+        var previous_cell: Vector2i = ball_cell
+        pieces = snapshot.duplicate(true)
+        _fb_ai_apply(move)
+        var score: int = _fb_ai_search(1, depth - 1, -60000, 60000)
+        pieces = snapshot
+        ball_holder = previous_holder
+        ball_cell = previous_cell
+        if score > best_score:
+            best_score = score
+            best = move
+    return best
 
 func _bot_turn() -> void:
     if not is_inside_tree():
@@ -1181,64 +1344,19 @@ func _bot_turn() -> void:
     bot_pending = false
     if game_mode != 0 or turn != 2 or game_over:
         return
-    var candidates: Array[Dictionary] = []
-    var must_capture := _team_must_capture(2)
-    for i in pieces.size():
-        if not pieces[i]["alive"] or pieces[i]["team"] != 2:
-            continue
-        var from: Vector2i = pieces[i]["cell"]
-        for capture in _captures(i):
-            var weight: int = 100 if bot_difficulty > 0 else randi_range(0, 60)
-            if bot_difficulty == 2:
-                weight += _football_bot_score(i, capture["cell"], capture["victim"])
-            candidates.append({"piece": i, "to": capture["cell"], "victim": capture["victim"], "weight": weight})
-        if must_capture:
-            continue
-        for dr in [-1, 1]:
-            if ball_holder == i and dr != 1:
-                continue
-            for dc in [-1, 1]:
-                var target := from + Vector2i(dr, dc)
-                if not _inside(target) or _piece_at(target) != -1:
-                    continue
-                var weight := 5
-                if ball_holder == i:
-                    weight += 12 + target.x * 3
-                elif ball_holder == -1:
-                    weight += 20 - (abs(target.x - ball_cell.x) + abs(target.y - ball_cell.y)) * 3
-                elif dr == 1:
-                    weight += 3
-                if bot_difficulty == 0:
-                    weight = randi_range(0, 70)
-                elif bot_difficulty == 1:
-                    weight += randi_range(-10, 10)
-                else:
-                    weight += _football_bot_score(i, target, -1)
-                candidates.append({"piece": i, "to": target, "victim": -1, "weight": weight})
-        # The bot can also give a one-cell diagonal pass to its own teammate.
-        if ball_holder == i:
-            for j in pieces.size():
-                if not _can_pass(i, j):
-                    continue
-                var receiver: Vector2i = pieces[j]["cell"]
-                var pass_weight: int = 12 + (receiver.x - from.x) * 10 + receiver.x * 2
-                # Prefer a diagonal pass to a teammate waiting in the goal.
-                if receiver.x == ROWS - 1 and receiver.y >= 2 and receiver.y <= 5:
-                    pass_weight += 900
-                if not _carrier_has_move(i):
-                    pass_weight += 65
-                if bot_difficulty == 0:
-                    pass_weight = randi_range(0, 70)
-                elif bot_difficulty == 1:
-                    pass_weight += randi_range(-9, 9)
-                candidates.append({"piece": i, "pass_to": j, "weight": pass_weight})
+    var candidates: Array[Dictionary] = _fb_ai_choices(2)
     if candidates.is_empty():
         message = "Бот не может сделать ход"
         turn = 1
         queue_redraw()
         return
-    candidates.sort_custom(func(a, b): return a["weight"] > b["weight"])
-    var best: Dictionary = candidates[0]
+    var best: Dictionary
+    if bot_difficulty == 0:
+        # Beginner makes occasional mistakes without breaking legal moves.
+        best = candidates.pick_random()
+    else:
+        # Experienced sees one reply; Legend sees the reply and counterplay.
+        best = _fb_choose_action(candidates, 2 if bot_difficulty == 1 else 3)
     selected = int(best["piece"])
     if best.has("pass_to"):
         _pass_ball(int(best["pass_to"]))
@@ -1256,7 +1374,15 @@ func _bot_turn() -> void:
     # Keep capturing with the same piece while captures are available.
     if best["victim"] >= 0:
         while not _captures(selected).is_empty():
-            var next_capture: Dictionary = _captures(selected)[0]
+            var all_captures: Array = _captures(selected)
+            var next_capture: Dictionary = all_captures[0]
+            if bot_difficulty > 0 and all_captures.size() > 1:
+                var chain_candidates: Array[Dictionary] = []
+                for cap in all_captures:
+                    chain_candidates.append({"piece":selected, "to":cap["cell"], "victim":cap["victim"]})
+                next_capture = all_captures[0]
+                var chain_choice: Dictionary = _fb_choose_action(chain_candidates, 1 if bot_difficulty == 1 else 2)
+                next_capture = {"cell":chain_choice["to"], "victim":chain_choice["victim"]}
             pieces[next_capture["victim"]]["alive"] = false
             _start_hit_fx(pieces[next_capture["victim"]]["cell"])
             if ball_holder == next_capture["victim"]:

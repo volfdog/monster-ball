@@ -30,7 +30,13 @@ func _init_menu_audio() -> void:
     menu_music = AudioStreamPlayer.new()
     menu_music.name = "HalloweenTitleTheme"
     add_child(menu_music)
+    # A full-length licensed recording (OGG/MP3) takes priority over old WAV.
     var theme_path: String = "res://audio/halloween_theme.wav"
+    for extension in ["ogg", "mp3"]:
+        var candidate: String = "res://audio/halloween_theme.%s" % extension
+        if ResourceLoader.exists(candidate):
+            theme_path = candidate
+            break
     if ResourceLoader.exists(theme_path):
         var melody: AudioStream = load(theme_path)
         var wav_melody: AudioStreamWAV = melody as AudioStreamWAV
@@ -97,9 +103,15 @@ func _test_background_audio() -> void:
     if melody_ready:
         menu_music.stop()
         menu_music.play()
-    var crowd_ready: bool = ResourceLoader.exists("res://audio/crowd.wav")
+    var crowd_path: String = "res://audio/crowd.wav"
+    for extension in ["ogg", "mp3"]:
+        var option: String = "res://audio/stadium_crowd.%s" % extension
+        if ResourceLoader.exists(option):
+            crowd_path = option
+            break
+    var crowd_ready: bool = ResourceLoader.exists(crowd_path)
     if crowd_ready:
-        var test_stream: AudioStream = load("res://audio/crowd.wav")
+        var test_stream: AudioStream = load(crowd_path)
         if test_stream != null:
             # This test is intentionally loud and one-shot, like working SFX.
             var test_player: AudioStreamPlayer = AudioStreamPlayer.new()
