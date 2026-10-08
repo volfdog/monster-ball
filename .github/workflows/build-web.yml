@@ -1,11 +1,26 @@
-name: Build Monster Ball Web
+
+name: Build and Deploy Monster Ball Web
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout
@@ -25,9 +40,17 @@ jobs:
         run: |
           mkdir -p build/web
           godot --headless --path . --export-release "Web" build/web/index.html
+          touch build/web/.nojekyll
 
-      - name: Upload Web
-        uses: actions/upload-artifact@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: MonsterBall-Web
-          path: build/web/
+          path: build/web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
