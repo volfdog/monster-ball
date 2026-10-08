@@ -2,6 +2,7 @@ extends Control
 
 const ROWS := 10
 const COLS := 8
+const FOOTBALL_TEAM_SIZE := 5
 const BLUE := Color("#4ac5e8")
 const RED := Color("#e45a78")
 const BALL := Color("#f6cf65")
@@ -24,7 +25,7 @@ var winner := 0
 var fantasy_textures: Dictionary = {}
 const BLUE_SKINS := ["blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf"]
 const RED_SKINS := ["red_skull", "red_orc", "red_goblin", "red_vampire"]
-var piece_skins: Array[int] = [0, 1, 2, 3, 0, 1, 2, 3]
+var piece_skins: Array[int] = [0, 1, 2, 3, 0, 0, 1, 2, 3, 0]
 var customization_open: bool = false
 var customization_team: int = 1
 var customization_slot: int = 0
@@ -57,6 +58,9 @@ func _process(delta: float) -> void:
         queue_redraw()
     if fx_bounce_time > 0.0:
         fx_bounce_time = maxf(0.0, fx_bounce_time - delta)
+        queue_redraw()
+    if pass_fx_progress < 1.0:
+        pass_fx_progress = minf(1.0, pass_fx_progress + delta / 0.26)
         queue_redraw()
     if selected >= 0 or drag_active: queue_redraw()
     if customization_open:
@@ -112,7 +116,7 @@ func _confirmation_tap(point: Vector2) -> void:
     var r := Rect2((size.x - w) * 0.5, (size.y - h) * 0.5, w, h)
     var by: float = r.end.y - 65.0
     if point.y >= by and point.y <= by + 45.0 and point.x > size.x * 0.5:
-        piece_skins[(customization_team - 1) * 4 + customization_slot] = pending_skin
+        piece_skins[(customization_team - 1) * FOOTBALL_TEAM_SIZE + customization_slot] = pending_skin
         get_tree().root.set_meta("mb_football_skins", piece_skins.duplicate())
     pending_skin = -1
     queue_redraw()
@@ -484,8 +488,12 @@ func _drag_event(event: InputEvent) -> bool:
     return false
 
 func _valid_drop(cell: Vector2i) -> bool:
-    if selected < 0 or not _inside(cell) or _piece_at(cell) >= 0:
+    if selected < 0 or not _inside(cell):
         return false
+    var target_player: int = _piece_at(cell)
+    # The ball can be dragged onto an adjacent diagonal teammate to pass.
+    if target_player >= 0:
+        return _can_pass(selected, target_player) and not _team_must_capture(turn)
     for capture in _captures(selected):
         if capture["cell"] == cell:
             return true
@@ -549,6 +557,11 @@ func _draw_drag_hints() -> void:
         var target: Vector2i = capture["cell"]
         _magic_ring(origin + Vector2(target.y + 0.5, target.x + 0.5) * side, side * 0.28, Color("#ff6835"))
     if mandatory: return
+    if ball_holder == selected:
+        for teammate in pieces.size():
+            if _can_pass(selected, teammate):
+                var receiver_cell: Vector2i = pieces[teammate]["cell"]
+                _magic_ring(origin + Vector2(receiver_cell.y + 0.5, receiver_cell.x + 0.5) * side, side * 0.39, Color("#ffca62"), true)
     for direction in [Vector2i(-1,-1),Vector2i(-1,1),Vector2i(1,-1),Vector2i(1,1)]:
         var target: Vector2i = origin_cell + direction
         var forward: int = -1 if turn == 1 else 1
@@ -568,6 +581,9 @@ var fx_bounce_from: Vector2 = Vector2.ZERO
 var fx_bounce_start: Vector2 = Vector2.ZERO
 var fx_bounce_piece: int = -1
 var fx_bounce_time: float = 0.0
+var pass_fx_from: Vector2i = Vector2i(-1, -1)
+var pass_fx_to: Vector2i = Vector2i(-1, -1)
+var pass_fx_progress: float = 1.0
 
 func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void:
     fx_piece = index
@@ -583,6 +599,15 @@ func _start_hit_fx(cell: Vector2i) -> void:
 func _draw_game_fx() -> void:
     var g: Dictionary = _geometry()
     var side: float = g["cell_size"]
+    if pass_fx_progress < 1.0 and _inside(pass_fx_from) and _inside(pass_fx_to):
+        var start: Vector2 = _drag_cell_center(pass_fx_from)
+        var finish: Vector2 = _drag_cell_center(pass_fx_to)
+        var t: float = pass_fx_progress
+        var center: Vector2 = start.lerp(finish, t) + Vector2(0.0, -sin(t * PI) * side * 0.25)
+        draw_line(start, finish, Color("#ffb958", 0.47 * (1.0 - t)), 3.0)
+        draw_circle(center, side * 0.23, Color("#ff9c30", 0.3))
+        if not _draw_asset("ghost_pumpkin", Rect2(center - Vector2.ONE * side * 0.24, Vector2.ONE * side * 0.48)):
+            _draw_ghost_pumpkin(center, side * 0.17)
     if fx_impact_time > 0.0 and _inside(fx_impact):
         var center: Vector2 = _drag_cell_center(fx_impact)
         var t: float = 1.0 - fx_impact_time / 0.55
@@ -640,17 +665,27 @@ func _ready() -> void:
     customization_open = bool(get_tree().root.get_meta("mb_customize", false))
     if get_tree().root.has_meta("mb_football_skins"):
         var saved: Array = get_tree().root.get_meta("mb_football_skins")
-        for j in mini(saved.size(), piece_skins.size()):
-            piece_skins[j] = int(saved[j])
+        # Keep the original four outfits for each side when upgrading from 4v4.
+        # Old saved order: blue 0..3, red 4..7. New order: blue 0..4, red 5..9.
+        if saved.size() == 8:
+            for slot in 4:
+                piece_skins[slot] = clampi(int(saved[slot]), 0, 3)
+                piece_skins[FOOTBALL_TEAM_SIZE + slot] = clampi(int(saved[4 + slot]), 0, 3)
+        else:
+            for j in mini(saved.size(), piece_skins.size()):
+                piece_skins[j] = clampi(int(saved[j]), 0, 3)
 
 func _reset_board() -> void:
     pieces.clear()
     fx_progress = 1.0
     fx_impact_time = 0.0
-    for c in [0, 2, 4, 6]:
-        pieces.append({"team": 1, "cell": Vector2i(9, c + 1), "alive": true})
-    for c in [1, 3, 5, 7]:
-        pieces.append({"team": 2, "cell": Vector2i(0, c - 1), "alive": true})
+    pass_fx_progress = 1.0
+    # Football: five players per side; second-line players mirror each other.
+    # All starting cells are distinct playable diagonal-board cells.
+    for cell in [Vector2i(9, 1), Vector2i(9, 3), Vector2i(9, 5), Vector2i(9, 7), Vector2i(8, 4)]:
+        pieces.append({"team": 1, "cell": cell, "alive": true})
+    for cell in [Vector2i(0, 0), Vector2i(0, 2), Vector2i(0, 4), Vector2i(0, 6), Vector2i(1, 3)]:
+        pieces.append({"team": 2, "cell": cell, "alive": true})
     ball_cell = Vector2i(4, 4)
     ball_holder = -1
     selected = -1
@@ -700,6 +735,60 @@ func _team_must_capture(team: int) -> bool:
 func _inside(cell: Vector2i) -> bool:
     return cell.x >= 0 and cell.x < ROWS and cell.y >= 0 and cell.y < COLS
 
+# A football pass is exactly one cell diagonally in any direction.
+# Normal piece movement rules remain unchanged.
+func _can_pass(from_index: int, to_index: int) -> bool:
+    if from_index < 0 or to_index < 0 or from_index >= pieces.size() or to_index >= pieces.size():
+        return false
+    if from_index == to_index or ball_holder != from_index:
+        return false
+    if not bool(pieces[from_index]["alive"]) or not bool(pieces[to_index]["alive"]):
+        return false
+    if int(pieces[from_index]["team"]) != turn or int(pieces[to_index]["team"]) != turn:
+        return false
+    var from_cell: Vector2i = pieces[from_index]["cell"]
+    var to_cell: Vector2i = pieces[to_index]["cell"]
+    return absi(to_cell.x - from_cell.x) == 1 and absi(to_cell.y - from_cell.y) == 1
+
+func _pass_ball(to_index: int) -> void:
+    if not _can_pass(ball_holder, to_index):
+        return
+    pass_fx_from = pieces[ball_holder]["cell"]
+    pass_fx_to = pieces[to_index]["cell"]
+    pass_fx_progress = 0.0
+    ball_holder = to_index
+    ball_cell = pass_fx_to
+    var score_before: Array = scores.duplicate()
+    _finish_turn()
+    # Keep the goal message if the other team's lone carrier gets stuck.
+    if not game_over and scores == score_before:
+        message = "ПАС! " + ("Ход голубых" if turn == 1 else "Ход красных")
+    queue_redraw()
+
+func _carrier_has_move(index: int) -> bool:
+    if index < 0 or index >= pieces.size() or not bool(pieces[index]["alive"]):
+        return false
+    if not _captures(index).is_empty():
+        return true
+    var forward: int = -1 if int(pieces[index]["team"]) == 1 else 1
+    var from_cell: Vector2i = pieces[index]["cell"]
+    for dc in [-1, 1]:
+        var target: Vector2i = from_cell + Vector2i(forward, dc)
+        if _inside(target) and _piece_at(target) == -1:
+            return true
+    return false
+
+func _check_last_carrier_stuck(team_id: int) -> bool:
+    # Only the last surviving ball carrier can concede a goal this way.
+    if _living(team_id) != 1 or ball_holder < 0 or game_over:
+        return false
+    if not bool(pieces[ball_holder]["alive"]) or int(pieces[ball_holder]["team"]) != team_id:
+        return false
+    if _carrier_has_move(ball_holder):
+        return false
+    _award_point(3 - team_id, "МЯЧ ЗАБЛОКИРОВАН — ГОЛ СОПЕРНИКА!")
+    return true
+
 func _gui_input(event: InputEvent) -> void:
     if _drag_event(event):
         accept_event()
@@ -743,7 +832,7 @@ func _customization_tap(point: Vector2) -> void:
         customization_team = 1 if point.x < size.x * 0.5 else 2
         customization_slot = 0
     elif point.y < 245.0:
-        customization_slot = clampi(int(point.x / maxf(1.0, size.x / 4.0)), 0, 3)
+        customization_slot = clampi(int(point.x / maxf(1.0, size.x / float(FOOTBALL_TEAM_SIZE))), 0, FOOTBALL_TEAM_SIZE - 1)
     elif point.y >= 255.0 and point.y <= 265.0 + size.x / 4.0:
         var skin: int = clampi(int(point.x / maxf(1.0, size.x / 4.0)), 0, 3)
         pending_skin = skin
@@ -751,12 +840,21 @@ func _customization_tap(point: Vector2) -> void:
 
 func _tap(cell: Vector2i) -> void:
     var clicked := _piece_at(cell)
+    # Passing must be checked BEFORE teammate selection; otherwise a tap on
+    # a teammate simply switches the selected player and no pass occurs.
+    if clicked >= 0 and selected >= 0 and _can_pass(selected, clicked):
+        if _team_must_capture(turn):
+            message = "Сначала обязательное съедение"
+            queue_redraw()
+        else:
+            _pass_ball(clicked)
+        return
     if clicked >= 0 and pieces[clicked]["team"] == turn:
         if _team_must_capture(turn) and _captures(clicked).is_empty():
             message = "Нужно съесть фишку соперника"
         else:
             selected = clicked
-            message = "Выбери соседнюю диагональную клетку"
+            message = "Пас: выбери союзника по диагонали" if ball_holder == clicked else "Выбери соседнюю диагональную клетку"
         queue_redraw()
         return
     if selected < 0:
@@ -820,6 +918,9 @@ func _finish_turn() -> void:
     selected = -1
     turn = 2 if turn == 1 else 1
     message = "Ход голубых" if turn == 1 else "Ход красных"
+    # Check as soon as the blocked team would receive the turn.
+    if _check_last_carrier_stuck(turn):
+        return
     queue_redraw()
     if game_mode == 0 and turn == 2 and not game_over:
         _schedule_bot()
@@ -898,6 +999,20 @@ func _bot_turn() -> void:
                 else:
                     weight += _football_bot_score(i, target, -1)
                 candidates.append({"piece": i, "to": target, "victim": -1, "weight": weight})
+        # The bot can also give a one-cell diagonal pass to its own teammate.
+        if ball_holder == i:
+            for j in pieces.size():
+                if not _can_pass(i, j):
+                    continue
+                var receiver: Vector2i = pieces[j]["cell"]
+                var pass_weight: int = 12 + (receiver.x - from.x) * 10 + receiver.x * 2
+                if not _carrier_has_move(i):
+                    pass_weight += 65
+                if bot_difficulty == 0:
+                    pass_weight = randi_range(0, 70)
+                elif bot_difficulty == 1:
+                    pass_weight += randi_range(-9, 9)
+                candidates.append({"piece": i, "pass_to": j, "weight": pass_weight})
     if candidates.is_empty():
         message = "Бот не может сделать ход"
         turn = 1
@@ -905,7 +1020,10 @@ func _bot_turn() -> void:
         return
     candidates.sort_custom(func(a, b): return a["weight"] > b["weight"])
     var best: Dictionary = candidates[0]
-    selected = best["piece"]
+    selected = int(best["piece"])
+    if best.has("pass_to"):
+        _pass_ball(int(best["pass_to"]))
+        return
     if best["victim"] >= 0:
         pieces[best["victim"]]["alive"] = false
         _start_hit_fx(pieces[best["victim"]]["cell"])
@@ -1020,7 +1138,7 @@ func _draw() -> void:
             continue
         if not _draw_asset(key, Rect2(token_center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
             _draw_fantasy_token(token_center, side * 0.37, team, i)
-        if ball_holder == i:
+        if ball_holder == i and pass_fx_progress >= 1.0:
             var pumpkin_center := token_center + Vector2(side * 0.17, -side * 0.20)
             var pumpkin_size := side * 0.50
             if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
@@ -1060,21 +1178,21 @@ func _draw_customization_panel() -> void:
     draw_string(font, Vector2(10, 166), "СИНИЕ", HORIZONTAL_ALIGNMENT_LEFT, half - 15, 16, Color.WHITE)
     draw_string(font, Vector2(half + 10, 166), "КРАСНЫЕ", HORIZONTAL_ALIGNMENT_LEFT, half - 15, 16, Color.WHITE)
     var skins: Array = BLUE_SKINS if customization_team == 1 else RED_SKINS
-    for slot in 4:
-        var x: float = float(slot) * size.x / 4.0
-        var w: float = size.x / 4.0
+    for slot in FOOTBALL_TEAM_SIZE:
+        var x: float = float(slot) * size.x / float(FOOTBALL_TEAM_SIZE)
+        var w: float = size.x / float(FOOTBALL_TEAM_SIZE)
         draw_rect(Rect2(x + 2, 192, w - 4, 46), Color("#38687a") if slot == customization_slot else Color("#303441"))
-        draw_string(font, Vector2(x + 7, 222), "Фишка %d" % (slot + 1), HORIZONTAL_ALIGNMENT_LEFT, w - 10, 13, Color.WHITE)
+        draw_string(font, Vector2(x + 5, 222), "Игрок %d" % (slot + 1), HORIZONTAL_ALIGNMENT_LEFT, w - 8, 12, Color.WHITE)
     for skin_idx in 4:
         var w: float = size.x / 4.0
         var x: float = float(skin_idx) * w
         var rect := Rect2(x + 7, 267, w - 14, w - 14)
-        var chosen: bool = piece_skins[(customization_team - 1) * 4 + customization_slot] == skin_idx
+        var chosen: bool = piece_skins[(customization_team - 1) * FOOTBALL_TEAM_SIZE + customization_slot] == skin_idx
         _flame_frame(rect.grow(2), chosen)
         _draw_asset(skins[skin_idx], rect)
         draw_string(font, Vector2(x + 10, 284 + w), "ОБЛИК %d" % (skin_idx + 1), HORIZONTAL_ALIGNMENT_LEFT, w - 14, 12, Color("#ffdab0"))
     var caption_y: float = 315.0 + size.x / 4.0
-    draw_string(font, Vector2(14, caption_y), "Выбери фишку, затем облик", HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 16, Color("#d4e6ed"))
+    draw_string(font, Vector2(14, caption_y), "5 игроков · выбери игрока и облик", HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 16, Color("#d4e6ed"))
     draw_string(font, Vector2(14, size.y - 26), "ЗАКРЫТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#a5d4dc"))
 
 
