@@ -47,6 +47,8 @@ var flame_time: float = 0.0
 var fancy_font: Font
 
 func _process(delta: float) -> void:
+    magic_clock += delta
+    if selected >= 0 or drag_active: queue_redraw()
     if customization_open:
         flame_time += delta
         queue_redraw()
@@ -104,6 +106,118 @@ func _confirmation_tap(point: Vector2) -> void:
         get_tree().root.set_meta("mb_football_skins", piece_skins.duplicate())
     pending_skin = -1
     queue_redraw()
+
+
+# Touch/mouse drag: the board piece follows the pointer; release validates the move.
+var drag_active: bool = false
+var drag_moved: bool = false
+var drag_pointer: Vector2 = Vector2.ZERO
+var drag_origin: Vector2i = Vector2i(-1, -1)
+var magic_clock: float = 0.0
+
+func _magic_ring(center: Vector2, radius: float, hue: Color, strong: bool = false) -> void:
+    var wave: float = 0.5 + 0.5 * sin(magic_clock * 5.0)
+    draw_circle(center, radius * 1.17, Color(hue.r, hue.g, hue.b, 0.05 + wave * 0.07))
+    draw_arc(center, radius, 0.0, TAU, 56, Color(hue.r, hue.g, hue.b, 0.75), 2.8 if strong else 2.0)
+    draw_arc(center, radius * 1.10, magic_clock, magic_clock + PI * 1.35, 35, Color(hue.r, hue.g, hue.b, 0.7), 2.2)
+    for j in 6:
+        var angle: float = float(j) * TAU / 6.0 + magic_clock * 0.7
+        var dot: Vector2 = center + Vector2(cos(angle), sin(angle)) * radius * 1.10
+        draw_circle(dot, 2.4 if strong else 1.7, hue)
+
+func _drag_event(event: InputEvent) -> bool:
+    var point: Vector2 = Vector2.ZERO
+    var pressed: bool = false
+    var released: bool = false
+    var moving: bool = false
+    if event is InputEventScreenTouch:
+        if event.index != 0: return true
+        point = event.position
+        pressed = event.pressed
+        released = not event.pressed
+    elif event is InputEventScreenDrag:
+        if event.index != 0: return true
+        point = event.position
+        moving = true
+    elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+        point = event.position
+        pressed = event.pressed
+        released = not event.pressed
+    elif event is InputEventMouseMotion and drag_active and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+        point = event.position
+        moving = true
+    else:
+        return false
+    if moving:
+        if drag_active:
+            drag_pointer = point
+            if drag_pointer.distance_to(_drag_cell_center(drag_origin)) > 8.0:
+                drag_moved = true
+            queue_redraw()
+        return true
+    if released:
+        if drag_active:
+            drag_active = false
+            var old: Vector2i = drag_origin
+            drag_origin = Vector2i(-1, -1)
+            if drag_moved:
+                var target: Vector2i = _drag_point_to_cell(point)
+                if _drag_cell_valid(target) and target != old:
+                    _tap(target)
+            drag_moved = false
+            queue_redraw()
+        return true
+    if pressed and _drag_can_start(point):
+        var cell: Vector2i = _drag_point_to_cell(point)
+        if _drag_cell_valid(cell) and _drag_is_own_piece(cell):
+            drag_active = true
+            drag_moved = false
+            drag_origin = cell
+            drag_pointer = point
+            _tap(cell)
+            queue_redraw()
+            return true
+    return false
+
+func _drag_point_to_cell(point: Vector2) -> Vector2i:
+    var g: Dictionary = _geometry()
+    var side: float = g["cell_size"]
+    var origin: Vector2 = g["offset"]
+    return Vector2i(int(floor((point.y - origin.y) / side)), int(floor((point.x - origin.x) / side)))
+
+func _drag_cell_center(cell: Vector2i) -> Vector2:
+    var g: Dictionary = _geometry()
+    var side: float = g["cell_size"]
+    var origin: Vector2 = g["offset"]
+    return origin + Vector2(cell.y + 0.5, cell.x + 0.5) * side
+
+func _drag_cell_valid(cell: Vector2i) -> bool:
+    return _inside(cell)
+
+func _drag_is_own_piece(cell: Vector2i) -> bool:
+    var i: int = _piece_at(cell)
+    return i >= 0 and int(pieces[i]["team"]) == turn
+
+func _drag_can_start(point: Vector2) -> bool:
+    return not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
+
+func _draw_drag_hints() -> void:
+    if selected < 0 or selected >= pieces.size(): return
+    if not pieces[selected]["alive"]: return
+    var g: Dictionary = _geometry()
+    var side: float = g["cell_size"]
+    var origin: Vector2 = g["offset"]
+    var origin_cell: Vector2i = pieces[selected]["cell"]
+    var mandatory: bool = _team_must_capture(turn)
+    for capture in _captures(selected):
+        var target: Vector2i = capture["cell"]
+        _magic_ring(origin + Vector2(target.y + 0.5, target.x + 0.5) * side, side * 0.28, Color("#ff6835"))
+    if mandatory: return
+    for direction in [Vector2i(-1,-1),Vector2i(-1,1),Vector2i(1,-1),Vector2i(1,1)]:
+        var target: Vector2i = origin_cell + direction
+        var forward: int = -1 if turn == 1 else 1
+        if _inside(target) and _piece_at(target) < 0 and (ball_holder != selected or direction.x == forward):
+            _magic_ring(origin + Vector2(target.y + 0.5, target.x + 0.5) * side, side * 0.28, Color("#71f9b0"))
 
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
@@ -175,6 +289,9 @@ func _inside(cell: Vector2i) -> bool:
     return cell.x >= 0 and cell.x < ROWS and cell.y >= 0 and cell.y < COLS
 
 func _gui_input(event: InputEvent) -> void:
+    if _drag_event(event):
+        accept_event()
+        return
     var point := Vector2(-1, -1)
     if event is InputEventScreenTouch and event.pressed:
         point = event.position
@@ -475,14 +592,15 @@ func _draw() -> void:
         var cell: Vector2i = pieces[i]["cell"]
         var center := offset + Vector2(cell.y + 0.5, cell.x + 0.5) * side
         if i == selected:
-            draw_rect(Rect2(offset + Vector2(cell.y, cell.x) * side, Vector2.ONE * side), Color("#7ff9e2"), false, 3.0)
+            _magic_ring(center, side * 0.44, Color("#5eeeff"), true)
         var team: int = pieces[i]["team"]
         var key: String = BLUE_SKINS[piece_skins[i]] if team == 1 else RED_SKINS[piece_skins[i]]
         var token_side := side * 0.93
-        if not _draw_asset(key, Rect2(center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
+        var token_center: Vector2 = drag_pointer if drag_active and drag_moved and cell == drag_origin else center
+        if not _draw_asset(key, Rect2(token_center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
             _draw_fantasy_token(center, side * 0.37, team, i)
         if ball_holder == i:
-            var pumpkin_center := center + Vector2(side * 0.17, -side * 0.20)
+            var pumpkin_center := token_center + Vector2(side * 0.17, -side * 0.20)
             var pumpkin_size := side * 0.50
             if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
                 _draw_ghost_pumpkin(pumpkin_center, side * 0.16)
@@ -491,6 +609,7 @@ func _draw() -> void:
         var pumpkin_size := side * 0.90
         if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
             _draw_ghost_pumpkin(pumpkin_center, side * 0.23)
+    _draw_drag_hints()
     _draw_bottom_actions()
     if game_over:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))

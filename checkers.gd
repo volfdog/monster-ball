@@ -27,6 +27,8 @@ var flame_time: float = 0.0
 var fancy_font: Font
 
 func _process(delta: float) -> void:
+    magic_clock += delta
+    if selected.x >= 0 or drag_active: queue_redraw()
     if customization_open:
         flame_time += delta
         queue_redraw()
@@ -88,6 +90,112 @@ func _confirmation_tap(point: Vector2) -> void:
             get_tree().root.set_meta("mb_checkers_king", king_skin.duplicate())
     pending_skin = -1
     queue_redraw()
+
+
+# Touch/mouse drag: the board piece follows the pointer; release validates the move.
+var drag_active: bool = false
+var drag_moved: bool = false
+var drag_pointer: Vector2 = Vector2.ZERO
+var drag_origin: Vector2i = Vector2i(-1, -1)
+var magic_clock: float = 0.0
+
+func _magic_ring(center: Vector2, radius: float, hue: Color, strong: bool = false) -> void:
+    var wave: float = 0.5 + 0.5 * sin(magic_clock * 5.0)
+    draw_circle(center, radius * 1.17, Color(hue.r, hue.g, hue.b, 0.05 + wave * 0.07))
+    draw_arc(center, radius, 0.0, TAU, 56, Color(hue.r, hue.g, hue.b, 0.75), 2.8 if strong else 2.0)
+    draw_arc(center, radius * 1.10, magic_clock, magic_clock + PI * 1.35, 35, Color(hue.r, hue.g, hue.b, 0.7), 2.2)
+    for j in 6:
+        var angle: float = float(j) * TAU / 6.0 + magic_clock * 0.7
+        var dot: Vector2 = center + Vector2(cos(angle), sin(angle)) * radius * 1.10
+        draw_circle(dot, 2.4 if strong else 1.7, hue)
+
+func _drag_event(event: InputEvent) -> bool:
+    var point: Vector2 = Vector2.ZERO
+    var pressed: bool = false
+    var released: bool = false
+    var moving: bool = false
+    if event is InputEventScreenTouch:
+        if event.index != 0: return true
+        point = event.position
+        pressed = event.pressed
+        released = not event.pressed
+    elif event is InputEventScreenDrag:
+        if event.index != 0: return true
+        point = event.position
+        moving = true
+    elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+        point = event.position
+        pressed = event.pressed
+        released = not event.pressed
+    elif event is InputEventMouseMotion and drag_active and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+        point = event.position
+        moving = true
+    else:
+        return false
+    if moving:
+        if drag_active:
+            drag_pointer = point
+            if drag_pointer.distance_to(_drag_cell_center(drag_origin)) > 8.0:
+                drag_moved = true
+            queue_redraw()
+        return true
+    if released:
+        if drag_active:
+            drag_active = false
+            var old: Vector2i = drag_origin
+            drag_origin = Vector2i(-1, -1)
+            if drag_moved:
+                var target: Vector2i = _drag_point_to_cell(point)
+                if _drag_cell_valid(target) and target != old:
+                    _tap(target)
+            drag_moved = false
+            queue_redraw()
+        return true
+    if pressed and _drag_can_start(point):
+        var cell: Vector2i = _drag_point_to_cell(point)
+        if _drag_cell_valid(cell) and _drag_is_own_piece(cell):
+            drag_active = true
+            drag_moved = false
+            drag_origin = cell
+            drag_pointer = point
+            _tap(cell)
+            queue_redraw()
+            return true
+    return false
+
+func _drag_point_to_cell(point: Vector2) -> Vector2i:
+    var g: Dictionary = _geometry()
+    var side: float = g["side"]
+    var origin: Vector2 = g["origin"]
+    return Vector2i(int(floor((point.y - origin.y) / side)), int(floor((point.x - origin.x) / side)))
+
+func _drag_cell_center(cell: Vector2i) -> Vector2:
+    var g: Dictionary = _geometry()
+    var side: float = g["side"]
+    var origin: Vector2 = g["origin"]
+    return origin + Vector2(cell.y + 0.5, cell.x + 0.5) * side
+
+func _drag_cell_valid(cell: Vector2i) -> bool:
+    return _inside(cell)
+
+func _drag_is_own_piece(cell: Vector2i) -> bool:
+    return not finished and not bot_pending and (game_mode != 0 or turn == 1) and int(_piece(cell)["team"]) == turn and (forced.x < 0 or cell == forced)
+
+func _drag_can_start(point: Vector2) -> bool:
+    return not customization_open and pending_skin < 0 and not finished and not bot_pending and (game_mode != 0 or turn == 1)
+
+func _draw_drag_hints() -> void:
+    if selected.x < 0 or not _inside(selected): return
+    var options: Array = _captures(selected)
+    if forced.x < 0 and not _must_capture(turn): options.append_array(_moves(selected))
+    var g: Dictionary = _geometry()
+    var side: float = g["side"]
+    var origin: Vector2 = g["origin"]
+    for option in options:
+        var cell: Vector2i = option["to"]
+        var center: Vector2 = origin + Vector2(cell.y + 0.5, cell.x + 0.5) * side
+        var capture: bool = option["taken"].x >= 0
+        _magic_ring(center, side * 0.28, Color("#ff6b30") if capture else Color("#71f9b0"))
 
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
@@ -248,6 +356,9 @@ func _tap(p: Vector2i) -> void:
     queue_redraw()
 
 func _gui_input(event: InputEvent) -> void:
+    if _drag_event(event):
+        accept_event()
+        return
     var pos := Vector2(-1,-1)
     if event is InputEventScreenTouch and event.pressed: pos = event.position
     elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT: pos = event.position
@@ -298,7 +409,7 @@ func _draw() -> void:
             if textures.has(texname): draw_texture_rect(textures[texname],rect,false)
             draw_rect(rect,Color("#0b1926",0.45),false,1.0)
             if p == selected:
-                draw_rect(rect,Color("#73ffcf"),false,3.0)
+                _magic_ring(at + Vector2.ONE * s * 0.5, s * 0.45, Color("#5eeeff"), true)
             var data: Dictionary = _piece(p)
             if data["team"] == 0: continue
             var center := at+Vector2.ONE*s*0.5
@@ -306,8 +417,11 @@ func _draw() -> void:
             var skin_idx: int = king_skin[team_idx] if data["king"] else pawn_skin[team_idx]
             var texname2: String = BLUE_SKINS[skin_idx] if team_idx == 0 else RED_SKINS[skin_idx]
             var inset: float = s*0.06
+            var display_rect: Rect2 = rect.grow(-inset)
+            if drag_active and drag_moved and p == drag_origin:
+                display_rect = Rect2(drag_pointer - Vector2.ONE * s * 0.5, Vector2.ONE * s).grow(-inset)
             if textures.has(texname2):
-                draw_texture_rect(textures[texname2],rect.grow(-inset),false)
+                draw_texture_rect(textures[texname2],display_rect,false)
             else:
                 draw_circle(center,s*0.39,Color("#2aaedc") if data["team"] == 1 else Color("#b83f43"))
                 draw_arc(center,s*0.37,0,TAU,40,Color("#c2efff"),3.0)
@@ -322,6 +436,7 @@ func _draw() -> void:
         var label: String = str(8-r)
         draw_string(font,o+Vector2(-19,(r+0.58)*s),label,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#b9e5e8"))
         draw_string(font,o+Vector2(8*s+7,(r+0.58)*s),label,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#b9e5e8"))
+    _draw_drag_hints()
     _draw_bottom_actions()
     if customization_open:
         _draw_customization(font)
