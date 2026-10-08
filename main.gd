@@ -45,6 +45,12 @@ func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
     _load_fantasy_assets()
     _reset_board()
+    game_mode = int(get_tree().root.get_meta("mb_mode", 0))
+    customization_open = bool(get_tree().root.get_meta("mb_customize", false))
+    if get_tree().root.has_meta("mb_football_skins"):
+        var saved: Array = get_tree().root.get_meta("mb_football_skins")
+        for j in mini(saved.size(), piece_skins.size()):
+            piece_skins[j] = int(saved[j])
 
 func _reset_board() -> void:
     pieces.clear()
@@ -113,6 +119,9 @@ func _gui_input(event: InputEvent) -> void:
     if customization_open:
         _customization_tap(point)
         return
+    if point.y < 38.0 and point.x > size.x * 0.64:
+        get_tree().change_scene_to_file("res://main.tscn")
+        return
     # The two menu buttons share a row: decide by X before opening either.
     if point.y >= 74.0 and point.y <= 116.0:
         if point.x >= size.x * 0.60:
@@ -159,6 +168,7 @@ func _customization_tap(point: Vector2) -> void:
     elif point.y >= 255.0 and point.y <= 265.0 + size.x / 4.0:
         var skin: int = clampi(int(point.x / maxf(1.0, size.x / 4.0)), 0, 3)
         piece_skins[(customization_team - 1) * 4 + customization_slot] = skin
+        get_tree().root.set_meta("mb_football_skins", piece_skins.duplicate())
     queue_redraw()
 
 func _tap(cell: Vector2i) -> void:
@@ -313,6 +323,8 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#14111b"))
     var font: Font = ThemeDB.fallback_font
     draw_string(font, Vector2(18, 27), "MONSTER BALL    %d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, -1, 21, Color.WHITE)
+    draw_rect(Rect2(size.x * 0.67, 1, size.x * 0.32, 35), Color("#31445c"))
+    draw_string(font, Vector2(size.x * 0.69, 26), "МЕНЮ ←", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
     var tab_width := size.x / 2.0
     draw_rect(Rect2(0, 38, tab_width, 32), Color("#347d80") if game_mode == 0 else Color("#37303d"))
     draw_rect(Rect2(tab_width, 38, tab_width, 32), Color("#347d80") if game_mode == 1 else Color("#37303d"))

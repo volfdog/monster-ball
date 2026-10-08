@@ -27,6 +27,14 @@ func _ready() -> void:
         if ResourceLoader.exists(path):
             textures[name] = load(path)
     _new_game()
+    game_mode = int(get_tree().root.get_meta("mb_mode", 0))
+    customization_open = bool(get_tree().root.get_meta("mb_customize", false))
+    if get_tree().root.has_meta("mb_checkers_pawn"):
+        var saved_pawn: Array = get_tree().root.get_meta("mb_checkers_pawn")
+        for j in mini(saved_pawn.size(), 2): pawn_skin[j] = int(saved_pawn[j])
+    if get_tree().root.has_meta("mb_checkers_king"):
+        var saved_king: Array = get_tree().root.get_meta("mb_checkers_king")
+        for j in mini(saved_king.size(), 2): king_skin[j] = int(saved_king[j])
 
 func _new_game() -> void:
     board.clear()
@@ -262,8 +270,10 @@ func _customization_tap(pos: Vector2) -> void:
         var index: int = clampi(int(pos.x / maxf(1.0, size.x / 4.0)), 0, 3)
         if customization_kind == 0:
             pawn_skin[customization_team - 1] = index
+            get_tree().root.set_meta("mb_checkers_pawn", pawn_skin.duplicate())
         else:
             king_skin[customization_team - 1] = index
+            get_tree().root.set_meta("mb_checkers_king", king_skin.duplicate())
     queue_redraw()
 
 func _draw_customization(font: Font) -> void:
