@@ -18,8 +18,25 @@ var game_over := false
 var bot_pending := false
 var winner := 0
 
+
+# High-detail fantasy assets are loaded from the local assets folder.
+var fantasy_textures: Dictionary = {}
+
+func _load_fantasy_assets() -> void:
+    for key in ["stone_dark", "stone_light", "blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf", "red_skull", "red_orc", "red_goblin", "red_vampire", "ghost_pumpkin"]:
+        var path := "res://assets/%s.png" % key
+        if ResourceLoader.exists(path):
+            fantasy_textures[key] = load(path)
+
+func _draw_asset(key: String, rect: Rect2) -> bool:
+    if not fantasy_textures.has(key):
+        return false
+    draw_texture_rect(fantasy_textures[key], rect, false)
+    return true
+
 func _ready() -> void:
     mouse_filter = Control.MOUSE_FILTER_STOP
+    _load_fantasy_assets()
     _reset_board()
 
 func _reset_board() -> void:
@@ -282,6 +299,7 @@ func _draw() -> void:
             var variation := float(((row * 17 + col * 29) % 9) - 4) * 0.012
             stone = stone.lightened(variation) if variation >= 0.0 else stone.darkened(-variation)
             draw_rect(rect, stone)
+            _draw_asset("stone_dark" if dark else "stone_light", rect)
             draw_line(pos + Vector2(2, 2), pos + Vector2(side - 3, 2), Color("#9fd6df", 0.14 if dark else 0.26), 1.5)
             draw_line(pos + Vector2(2, 2), pos + Vector2(2, side - 3), Color("#b6e4e6", 0.12 if dark else 0.24), 1.5)
             draw_line(pos + Vector2(2, side - 2), pos + Vector2(side - 2, side - 2), Color("#030e18", 0.45), 2.0)
@@ -335,11 +353,21 @@ func _draw() -> void:
         var center := offset + Vector2(cell.y + 0.5, cell.x + 0.5) * side
         if i == selected:
             draw_rect(Rect2(offset + Vector2(cell.y, cell.x) * side, Vector2.ONE * side), Color("#7ff9e2"), false, 3.0)
-        _draw_fantasy_token(center, side * 0.37, int(pieces[i]["team"]), i)
+        var team: int = pieces[i]["team"]
+        var key := ["blue_wizard", "blue_rogue", "blue_knight", "blue_dwarf"][i % 4] if team == 1 else ["red_skull", "red_orc", "red_goblin", "red_vampire"][i % 4]
+        var token_side := side * 0.93
+        if not _draw_asset(key, Rect2(center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
+            _draw_fantasy_token(center, side * 0.37, team, i)
         if ball_holder == i:
-            _draw_ghost_pumpkin(center + Vector2(side * 0.17, -side * 0.20), side * 0.16)
+            var pumpkin_center := center + Vector2(side * 0.17, -side * 0.20)
+            var pumpkin_size := side * 0.50
+            if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
+                _draw_ghost_pumpkin(pumpkin_center, side * 0.16)
     if ball_holder == -1:
-        _draw_ghost_pumpkin(offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side, side * 0.23)
+        var pumpkin_center := offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side
+        var pumpkin_size := side * 0.90
+        if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
+            _draw_ghost_pumpkin(pumpkin_center, side * 0.23)
     draw_string(font, Vector2(18, size.y - 24), "СБРОС / НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#dddddd"))
     if game_over:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
