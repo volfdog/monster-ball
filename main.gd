@@ -893,6 +893,12 @@ func _pass_ball(to_index: int) -> void:
     _play_sfx("pass")
     ball_holder = to_index
     ball_cell = pass_fx_to
+    # A pass can be an immediate goal: the RECEIVER already stands in the
+    # opponent's goal (the last row, columns C-F). Do not switch turns or
+    # reset the board before _award_point starts the goal celebration.
+    if _check_goal():
+        queue_redraw()
+        return
     var score_before: Array = scores.duplicate()
     _finish_turn()
     # Keep the goal message if the other team's lone carrier gets stuck.
@@ -1042,12 +1048,17 @@ func _move_selected(cell: Vector2i) -> void:
     queue_redraw()
 
 func _check_goal() -> bool:
-    if ball_holder != selected:
+    # Scoring is based on who NOW holds the ball, not on the last mover.
+    # This covers both walking into goal and receiving a pass while in goal.
+    if ball_holder < 0 or ball_holder >= pieces.size():
         return false
-    var cell: Vector2i = pieces[selected]["cell"]
-    var goal_row := 0 if turn == 1 else 9
+    if not bool(pieces[ball_holder]["alive"]):
+        return false
+    var scoring_team: int = int(pieces[ball_holder]["team"])
+    var cell: Vector2i = pieces[ball_holder]["cell"]
+    var goal_row: int = 0 if scoring_team == 1 else ROWS - 1
     if cell.x == goal_row and cell.y >= 2 and cell.y <= 5:
-        _award_point(turn, "ГОЛ!")
+        _award_point(scoring_team, "ГОЛ!")
         return true
     return false
 
@@ -1143,6 +1154,9 @@ func _bot_turn() -> void:
                     continue
                 var receiver: Vector2i = pieces[j]["cell"]
                 var pass_weight: int = 12 + (receiver.x - from.x) * 10 + receiver.x * 2
+                # Prefer a diagonal pass to a teammate waiting in the goal.
+                if receiver.x == ROWS - 1 and receiver.y >= 2 and receiver.y <= 5:
+                    pass_weight += 900
                 if not _carrier_has_move(i):
                     pass_weight += 65
                 if bot_difficulty == 0:
