@@ -15,3 +15,5 @@ renderer/rendering_method.mobile="gl_compatibility"
 textures/default_filters/use_nearest_mipmap_filter=false
 textures/vram_compression/import_etc2_astc=true
 audio/driver/enable_input=false
+[input_devices]
+pointing/emulate_mouse_from_touch=true
