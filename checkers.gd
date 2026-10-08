@@ -28,8 +28,9 @@ var fancy_font: Font
 
 func _process(delta: float) -> void:
     magic_clock += delta
+    if fmod(magic_clock, 0.11) < delta: queue_redraw()
     if fx_progress < 1.0:
-        fx_progress = minf(1.0, fx_progress + delta * 5.0)
+        fx_progress = minf(1.0, fx_progress + delta / fx_duration)
         queue_redraw()
     if fx_capture_time > 0.0:
         fx_capture_time = maxf(0.0, fx_capture_time - delta)
@@ -107,6 +108,67 @@ var drag_moved: bool = false
 var drag_pointer: Vector2 = Vector2.ZERO
 var drag_origin: Vector2i = Vector2i(-1, -1)
 var magic_clock: float = 0.0
+
+
+# HALLOWEEN: lightweight hand-drawn arena; no new assets or scenes required.
+# It stays behind the interactive board, so board coordinates are untouched.
+func _halloween_pumpkin(center: Vector2, radius: float) -> void:
+    draw_circle(center + Vector2(0.0, radius * 0.18), radius * 1.16, Color("#050713", 0.55))
+    draw_circle(center, radius, Color("#c05a22"))
+    draw_circle(center + Vector2(-radius * 0.15, -radius * 0.18), radius * 0.75, Color("#ed8730"))
+    draw_rect(Rect2(center + Vector2(-radius * 0.10, -radius * 1.26), Vector2(radius * 0.22, radius * 0.38)), Color("#507b3d"))
+    var ink := Color("#301321")
+    draw_colored_polygon(PackedVector2Array([center + Vector2(-radius * 0.72,-radius * 0.10), center + Vector2(-radius * 0.38,-radius * 0.46), center + Vector2(-radius * 0.20,-radius * 0.04)]), ink)
+    draw_colored_polygon(PackedVector2Array([center + Vector2(radius * 0.23,-radius * 0.06), center + Vector2(radius * 0.46,-radius * 0.49), center + Vector2(radius * 0.72,-radius * 0.08)]), ink)
+    draw_line(center + Vector2(-radius * 0.58,radius * 0.27), center + Vector2(radius * 0.56,radius * 0.30), ink, maxf(1.5, radius * 0.18))
+    draw_circle(center + Vector2(radius * 0.50,-radius * 0.68), radius * 0.21, Color("#ffbb50", 0.45))
+
+func _halloween_arena(origin: Vector2, board_extent: Vector2) -> void:
+    # Moonlit purple sky and distant graveyard silhouettes.
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#100d1d"))
+    var sky_base: float = maxf(95.0, origin.y - 10.0)
+    draw_rect(Rect2(Vector2(0, 71), Vector2(size.x, maxf(10.0, sky_base - 71.0))), Color("#22132e"))
+    var moon: Vector2 = Vector2(size.x * 0.78, maxf(94.0, origin.y - 70.0))
+    draw_circle(moon, 34.0, Color("#ffe9ae", 0.10))
+    draw_circle(moon, 25.0, Color("#f0d9ae", 0.26))
+    draw_circle(moon, 19.0, Color("#f5dbb0", 0.82))
+    for i in 12:
+        var x: float = float(i) * size.x / 11.0 - 8.0
+        var tower_height: float = float(16 + (i * 17) % 28)
+        var width: float = 15.0 + float(i % 3) * 4.0
+        var tower_top: float = sky_base - tower_height
+        draw_rect(Rect2(x, tower_top, width, tower_height + 9.0), Color("#0b101d"))
+        draw_colored_polygon(PackedVector2Array([Vector2(x - 3, tower_top), Vector2(x + width * 0.5, tower_top - 17.0), Vector2(x + width + 3, tower_top)]), Color("#0b101d"))
+        if i % 3 != 1:
+            draw_rect(Rect2(x + width * 0.42, tower_top + 9.0, 3.0, 6.0), Color("#ff9335", 0.73))
+    # Tiny flying bats above the stands.
+    for i in 5:
+        var bx: float = 19.0 + float(i) * (size.x - 43.0) / 5.0
+        var by: float = maxf(91.0, origin.y - 53.0) - float((i * 13) % 26)
+        var wing: float = 4.0 + float(i % 3)
+        draw_line(Vector2(bx - wing, by - 2), Vector2(bx, by + 1), Color("#040710"), 2.0)
+        draw_line(Vector2(bx, by + 1), Vector2(bx + wing, by - 2), Color("#040710"), 2.0)
+    # Stone pedestal: a visible left rim, right rim and deep front face.
+    var low: float = minf(14.0, maxf(6.0, board_extent.x * 0.025))
+    var back := Rect2(origin - Vector2(9.0, 9.0), board_extent + Vector2(18.0, 18.0))
+    draw_rect(back.grow(4.0), Color("#05050d"))
+    draw_colored_polygon(PackedVector2Array([Vector2(back.position.x, back.end.y), Vector2(back.end.x, back.end.y), Vector2(back.end.x - 5.0, back.end.y + low), Vector2(back.position.x + 6.0, back.end.y + low)]), Color("#482f39"))
+    draw_line(Vector2(back.position.x + 6.0, back.end.y + low), Vector2(back.end.x - 5.0, back.end.y + low), Color("#b66535"), 2.0)
+    draw_rect(back, Color("#251629"))
+    draw_rect(back, Color("#d18447"), false, 4.0)
+    # Graveyard spectators outside the playing surface.
+    for side_id in 2:
+        var xx: float = origin.x - 15.0 if side_id == 0 else origin.x + board_extent.x + 15.0
+        for j in 9:
+            var yy: float = origin.y + (float(j) + 0.5) * board_extent.y / 9.0
+            var alpha: float = 0.36 + 0.16 * sin(magic_clock * 1.6 + float(j) * 1.4)
+            draw_circle(Vector2(xx, yy), 4.4, Color("#a3e5dc", alpha * 0.55))
+            draw_circle(Vector2(xx, yy - 3.8), 3.0, Color("#ddfff1", alpha))
+            draw_circle(Vector2(xx - 1.1, yy - 4.2), 0.55, Color("#25213b"))
+            draw_circle(Vector2(xx + 1.1, yy - 4.2), 0.55, Color("#25213b"))
+    # Lantern-lit pumpkins above the arena; procedural, no PNG dependencies.
+    _halloween_pumpkin(Vector2(maxf(17.0, origin.x + 3.0), origin.y - 27.0), 9.0)
+    _halloween_pumpkin(Vector2(minf(size.x - 17.0, origin.x + board_extent.x - 3.0), origin.y - 27.0), 9.0)
 
 func _magic_ring(center: Vector2, radius: float, hue: Color, strong: bool = false) -> void:
     var wave: float = 0.5 + 0.5 * sin(magic_clock * 5.0)
@@ -207,7 +269,7 @@ func _drag_is_own_piece(cell: Vector2i) -> bool:
     return not finished and not bot_pending and (game_mode != 0 or turn == 1) and int(_piece(cell)["team"]) == turn and (forced.x < 0 or cell == forced)
 
 func _drag_can_start(point: Vector2) -> bool:
-    return not customization_open and pending_skin < 0 and not finished and not bot_pending and (game_mode != 0 or turn == 1)
+    return not customization_open and pending_skin < 0 and not finished and not bot_pending and fx_progress >= 0.99 and (game_mode != 0 or turn == 1)
 
 func _draw_drag_hints() -> void:
     if selected.x < 0 or not _inside(selected): return
@@ -226,6 +288,7 @@ func _draw_drag_hints() -> void:
 var fx_source: Vector2i = Vector2i(-1, -1)
 var fx_target: Vector2i = Vector2i(-1, -1)
 var fx_progress: float = 1.0
+var fx_duration: float = 0.72
 var fx_capture: Vector2i = Vector2i(-1, -1)
 var fx_capture_time: float = 0.0
 var fx_piece_data: Dictionary = {}
@@ -238,6 +301,7 @@ func _start_move_fx(source: Vector2i, target: Vector2i, captured: Vector2i, data
     fx_source = source
     fx_target = target
     fx_progress = 0.0
+    fx_duration = 0.19 if bool(data["king"]) else 0.72
     fx_piece_data = data.duplicate()
     if captured.x >= 0:
         fx_capture = captured
@@ -267,10 +331,15 @@ func _draw_game_fx() -> void:
                 draw_texture_rect(textures[key], Rect2(c - Vector2.ONE * side * 0.44, Vector2.ONE * side * 0.88), false)
         draw_arc(c, side * (0.25 + t * 0.2), 0.0, TAU, 36, Color(0.45, 0.96, 1.0, 0.8*(1.0-t)), 2.5)
     if fx_progress < 1.0 and fx_piece_data.size() > 0:
-        var eased: float = 1.0 - pow(1.0 - fx_progress, 3.0)
+        var eased: float = fx_progress * fx_progress * (3.0 - 2.0 * fx_progress)
         var c1: Vector2 = origin + Vector2(fx_source.y + 0.5, fx_source.x + 0.5) * side
         var c2: Vector2 = origin + Vector2(fx_target.y + 0.5, fx_target.x + 0.5) * side
-        var center: Vector2 = c1.lerp(c2, eased) - Vector2(0, sin(fx_progress * PI) * side * 0.12)
+        var height: float = side * (0.115 if bool(fx_piece_data["king"]) else 0.021)
+        var center: Vector2 = c1.lerp(c2, eased) - Vector2(0, sin(fx_progress * PI) * height)
+        draw_circle(center + Vector2(0, side * 0.19), side * 0.36, Color("#07060e", 0.38))
+        if not bool(fx_piece_data["king"]) and fx_progress > 0.84:
+            var landing: float = (fx_progress - 0.84) / 0.16
+            draw_arc(c2, side * (0.28 + landing * 0.14), 0, TAU, 32, Color("#efac74", 0.24 * (1.0 - landing)), 2.0)
         var team_idx: int = int(fx_piece_data["team"]) - 1
         var skin_idx: int = king_skin[team_idx] if bool(fx_piece_data["king"]) else pawn_skin[team_idx]
         var key: String = BLUE_SKINS[skin_idx] if team_idx == 0 else RED_SKINS[skin_idx]
@@ -394,6 +463,7 @@ func _has_move(side: int) -> bool:
     return false
 
 func _tap(p: Vector2i) -> void:
+    if fx_progress < 0.99: return
     if finished or bot_pending or (game_mode == 0 and turn == 2): return
     if forced.x >= 0 and p == forced:
         selected = p
@@ -479,14 +549,14 @@ func _gui_input(event: InputEvent) -> void:
     if _inside(p): _tap(p)
 
 func _draw() -> void:
-    draw_rect(Rect2(Vector2.ZERO,size),Color("#14111b"))
-    var font: Font = ThemeDB.fallback_font
-    draw_string(font, Vector2(18, 35), "MONSTER BALL  /  ШАШКИ", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 22, Color("#f3d59b"))
-    draw_string(font, Vector2(18, 72), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 17, Color("#d9f6f9"))
     var g: Dictionary = _geometry()
     var s: float = g["side"]
     var o: Vector2 = g["origin"]
-    draw_rect(Rect2(o-Vector2(5,5),Vector2(s*8+10,s*8+10)),Color("#8acbdf"),false,3.0)
+    _halloween_arena(o, Vector2(s * 8.0, s * 8.0))
+    var font: Font = ThemeDB.fallback_font
+    draw_string(font, Vector2(18, 35), "MONSTER BALL / HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 19, Color("#ffbb74"))
+    draw_string(font, Vector2(18, 72), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 17, Color("#d9f6f9"))
+    draw_rect(Rect2(o-Vector2(5,5),Vector2(s*8+10,s*8+10)),Color("#efad62"),false,3.0)
     for r in N:
         for c in N:
             var p := Vector2i(r,c)
@@ -496,6 +566,7 @@ func _draw() -> void:
             draw_rect(rect,Color("#182c3a") if dark else Color("#6b7a8a"))
             var texname := "stone_dark" if dark else "stone_light"
             if textures.has(texname): draw_texture_rect(textures[texname],rect,false)
+            draw_rect(rect, Color("#3e2238", 0.25))
             draw_rect(rect,Color("#0b1926",0.45),false,1.0)
             if p == selected:
                 _magic_ring(at + Vector2.ONE * s * 0.5, s * 0.45, Color("#5eeeff"), true)
@@ -618,7 +689,7 @@ func _evaluate_bot_checkers(source: Vector2i, target: Vector2i, victim: Vector2i
 func _bot_move() -> void:
     if not is_inside_tree():
         return
-    await get_tree().create_timer(0.35).timeout
+    await get_tree().create_timer(0.88).timeout
     if not is_inside_tree():
         return
     bot_pending = false
@@ -685,7 +756,7 @@ func _bot_move() -> void:
 func _bot_continue() -> void:
     if not is_inside_tree():
         return
-    await get_tree().create_timer(0.25).timeout
+    await get_tree().create_timer(0.80).timeout
     if not is_inside_tree() or game_mode != 0 or finished or turn != 2:
         return
     var moves: Array = _captures(forced)

@@ -48,8 +48,9 @@ var fancy_font: Font
 
 func _process(delta: float) -> void:
     magic_clock += delta
+    if fmod(magic_clock, 0.11) < delta: queue_redraw()
     if fx_progress < 1.0:
-        fx_progress = minf(1.0, fx_progress + delta * 5.0)
+        fx_progress = minf(1.0, fx_progress + delta / fx_duration)
         queue_redraw()
     if fx_impact_time > 0.0:
         fx_impact_time = maxf(0.0, fx_impact_time - delta)
@@ -123,6 +124,67 @@ var drag_moved: bool = false
 var drag_pointer: Vector2 = Vector2.ZERO
 var drag_origin: Vector2i = Vector2i(-1, -1)
 var magic_clock: float = 0.0
+
+
+# HALLOWEEN: lightweight hand-drawn arena; no new assets or scenes required.
+# It stays behind the interactive board, so board coordinates are untouched.
+func _halloween_pumpkin(center: Vector2, radius: float) -> void:
+    draw_circle(center + Vector2(0.0, radius * 0.18), radius * 1.16, Color("#050713", 0.55))
+    draw_circle(center, radius, Color("#c05a22"))
+    draw_circle(center + Vector2(-radius * 0.15, -radius * 0.18), radius * 0.75, Color("#ed8730"))
+    draw_rect(Rect2(center + Vector2(-radius * 0.10, -radius * 1.26), Vector2(radius * 0.22, radius * 0.38)), Color("#507b3d"))
+    var ink := Color("#301321")
+    draw_colored_polygon(PackedVector2Array([center + Vector2(-radius * 0.72,-radius * 0.10), center + Vector2(-radius * 0.38,-radius * 0.46), center + Vector2(-radius * 0.20,-radius * 0.04)]), ink)
+    draw_colored_polygon(PackedVector2Array([center + Vector2(radius * 0.23,-radius * 0.06), center + Vector2(radius * 0.46,-radius * 0.49), center + Vector2(radius * 0.72,-radius * 0.08)]), ink)
+    draw_line(center + Vector2(-radius * 0.58,radius * 0.27), center + Vector2(radius * 0.56,radius * 0.30), ink, maxf(1.5, radius * 0.18))
+    draw_circle(center + Vector2(radius * 0.50,-radius * 0.68), radius * 0.21, Color("#ffbb50", 0.45))
+
+func _halloween_arena(origin: Vector2, board_extent: Vector2) -> void:
+    # Moonlit purple sky and distant graveyard silhouettes.
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#100d1d"))
+    var sky_base: float = maxf(95.0, origin.y - 10.0)
+    draw_rect(Rect2(Vector2(0, 71), Vector2(size.x, maxf(10.0, sky_base - 71.0))), Color("#22132e"))
+    var moon: Vector2 = Vector2(size.x * 0.78, maxf(94.0, origin.y - 70.0))
+    draw_circle(moon, 34.0, Color("#ffe9ae", 0.10))
+    draw_circle(moon, 25.0, Color("#f0d9ae", 0.26))
+    draw_circle(moon, 19.0, Color("#f5dbb0", 0.82))
+    for i in 12:
+        var x: float = float(i) * size.x / 11.0 - 8.0
+        var tower_height: float = float(16 + (i * 17) % 28)
+        var width: float = 15.0 + float(i % 3) * 4.0
+        var tower_top: float = sky_base - tower_height
+        draw_rect(Rect2(x, tower_top, width, tower_height + 9.0), Color("#0b101d"))
+        draw_colored_polygon(PackedVector2Array([Vector2(x - 3, tower_top), Vector2(x + width * 0.5, tower_top - 17.0), Vector2(x + width + 3, tower_top)]), Color("#0b101d"))
+        if i % 3 != 1:
+            draw_rect(Rect2(x + width * 0.42, tower_top + 9.0, 3.0, 6.0), Color("#ff9335", 0.73))
+    # Tiny flying bats above the stands.
+    for i in 5:
+        var bx: float = 19.0 + float(i) * (size.x - 43.0) / 5.0
+        var by: float = maxf(91.0, origin.y - 53.0) - float((i * 13) % 26)
+        var wing: float = 4.0 + float(i % 3)
+        draw_line(Vector2(bx - wing, by - 2), Vector2(bx, by + 1), Color("#040710"), 2.0)
+        draw_line(Vector2(bx, by + 1), Vector2(bx + wing, by - 2), Color("#040710"), 2.0)
+    # Stone pedestal: a visible left rim, right rim and deep front face.
+    var low: float = minf(14.0, maxf(6.0, board_extent.x * 0.025))
+    var back := Rect2(origin - Vector2(9.0, 9.0), board_extent + Vector2(18.0, 18.0))
+    draw_rect(back.grow(4.0), Color("#05050d"))
+    draw_colored_polygon(PackedVector2Array([Vector2(back.position.x, back.end.y), Vector2(back.end.x, back.end.y), Vector2(back.end.x - 5.0, back.end.y + low), Vector2(back.position.x + 6.0, back.end.y + low)]), Color("#482f39"))
+    draw_line(Vector2(back.position.x + 6.0, back.end.y + low), Vector2(back.end.x - 5.0, back.end.y + low), Color("#b66535"), 2.0)
+    draw_rect(back, Color("#251629"))
+    draw_rect(back, Color("#d18447"), false, 4.0)
+    # Graveyard spectators outside the playing surface.
+    for side_id in 2:
+        var xx: float = origin.x - 15.0 if side_id == 0 else origin.x + board_extent.x + 15.0
+        for j in 9:
+            var yy: float = origin.y + (float(j) + 0.5) * board_extent.y / 9.0
+            var alpha: float = 0.36 + 0.16 * sin(magic_clock * 1.6 + float(j) * 1.4)
+            draw_circle(Vector2(xx, yy), 4.4, Color("#a3e5dc", alpha * 0.55))
+            draw_circle(Vector2(xx, yy - 3.8), 3.0, Color("#ddfff1", alpha))
+            draw_circle(Vector2(xx - 1.1, yy - 4.2), 0.55, Color("#25213b"))
+            draw_circle(Vector2(xx + 1.1, yy - 4.2), 0.55, Color("#25213b"))
+    # Lantern-lit pumpkins above the arena; procedural, no PNG dependencies.
+    _halloween_pumpkin(Vector2(maxf(17.0, origin.x + 3.0), origin.y - 27.0), 9.0)
+    _halloween_pumpkin(Vector2(minf(size.x - 17.0, origin.x + board_extent.x - 3.0), origin.y - 27.0), 9.0)
 
 func _magic_ring(center: Vector2, radius: float, hue: Color, strong: bool = false) -> void:
     var wave: float = 0.5 + 0.5 * sin(magic_clock * 5.0)
@@ -252,6 +314,7 @@ var fx_piece: int = -1
 var fx_from: Vector2i = Vector2i(-1, -1)
 var fx_to: Vector2i = Vector2i(-1, -1)
 var fx_progress: float = 1.0
+var fx_duration: float = 0.60
 var fx_impact: Vector2i = Vector2i(-1, -1)
 var fx_impact_time: float = 0.0
 var fx_bounce_from: Vector2 = Vector2.ZERO
@@ -264,6 +327,7 @@ func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void
     fx_from = origin
     fx_to = destination
     fx_progress = 0.0
+    fx_duration = 0.60
 
 func _start_hit_fx(cell: Vector2i) -> void:
     fx_impact = cell
@@ -549,7 +613,7 @@ func _football_bot_score(index: int, target: Vector2i, victim: int) -> int:
 func _bot_turn() -> void:
     if not is_inside_tree():
         return
-    await get_tree().create_timer(0.4).timeout
+    await get_tree().create_timer(0.77).timeout
     bot_pending = false
     if game_mode != 0 or turn != 2 or game_over:
         return
@@ -624,14 +688,15 @@ func _draw() -> void:
     var geometry := _geometry()
     var side: float = geometry["cell_size"]
     var offset: Vector2 = geometry["offset"]
-    draw_rect(Rect2(Vector2.ZERO, size), Color("#14111b"))
+    _halloween_arena(offset, Vector2(COLS * side, ROWS * side))
     var font: Font = ThemeDB.fallback_font
-    draw_string(font, Vector2(18, 27), "MONSTER BALL    %d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, -1, 21, Color.WHITE)
+    draw_string(font, Vector2(18, 27), "MONSTER BALL  /  HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36.0, 18, Color("#ffc079"))
+    draw_string(font, Vector2(18, 48), "%d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#dffcff"))
     draw_string(font, Vector2(18, 68), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 16, Color("#d9f6f9"))
     # Fantasy stone board. Geometry and input coordinates stay unchanged.
     var board_size := Vector2(COLS * side, ROWS * side)
     draw_rect(Rect2(offset - Vector2(6, 6), board_size + Vector2(12, 12)), Color("#0b1925"))
-    draw_rect(Rect2(offset - Vector2(4, 4), board_size + Vector2(8, 8)), Color("#61869c"), false, 3.0)
+    draw_rect(Rect2(offset - Vector2(4, 4), board_size + Vector2(8, 8)), Color("#db8b49"), false, 3.0)
     for row in ROWS:
         for col in COLS:
             var pos := offset + Vector2(col, row) * side
@@ -642,6 +707,7 @@ func _draw() -> void:
             stone = stone.lightened(variation) if variation >= 0.0 else stone.darkened(-variation)
             draw_rect(rect, stone)
             _draw_asset("stone_dark" if dark else "stone_light", rect)
+            draw_rect(rect, Color("#392036", 0.24))
             draw_line(pos + Vector2(2, 2), pos + Vector2(side - 3, 2), Color("#9fd6df", 0.14 if dark else 0.26), 1.5)
             draw_line(pos + Vector2(2, 2), pos + Vector2(2, side - 3), Color("#b6e4e6", 0.12 if dark else 0.24), 1.5)
             draw_line(pos + Vector2(2, side - 2), pos + Vector2(side - 2, side - 2), Color("#030e18", 0.45), 2.0)
@@ -662,7 +728,7 @@ func _draw() -> void:
     for row in range(ROWS + 1):
         var y := offset.y + row * side
         draw_line(Vector2(offset.x, y), Vector2(offset.x + board_size.x, y), Color("#07131f", 0.6), 1.0)
-    draw_rect(Rect2(offset, board_size), Color("#82cadc", 0.75), false, 2.0)
+    draw_rect(Rect2(offset, board_size), Color("#e5a65c", 0.75), false, 2.0)
     for col in COLS:
         var letter := char(65 + col)
         var x := offset.x + (col + 0.5) * side - 5.0
@@ -700,9 +766,9 @@ func _draw() -> void:
         var token_side := side * 0.93
         var token_center: Vector2 = center
         if fx_piece == i and fx_progress < 1.0 and not drag_active:
-            var eased: float = 1.0 - pow(1.0 - fx_progress, 3.0)
+            var eased: float = fx_progress * fx_progress * (3.0 - 2.0 * fx_progress)
             token_center = _drag_cell_center(fx_from).lerp(_drag_cell_center(fx_to), eased)
-            token_center.y -= sin(fx_progress * PI) * side * 0.13
+            token_center.y -= sin(fx_progress * PI) * side * 0.035
         if drag_active and drag_moved and cell == drag_origin:
             token_center = drag_pointer
         if not _draw_asset(key, Rect2(token_center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
