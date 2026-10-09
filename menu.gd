@@ -157,7 +157,7 @@ func _build() -> void:
     panel.set_anchors_preset(Control.PRESET_FULL_RECT)
     panel.anchor_left = 0.07
     panel.anchor_right = 0.93
-    panel.anchor_top = 0.36 if section == "about" else (0.39 if section == "sound" else 0.55)
+    panel.anchor_top = 0.39 if section == "sound" else 0.55
     panel.anchor_bottom = 0.98
     panel.offset_left = 0
     panel.offset_right = 0
@@ -166,7 +166,7 @@ func _build() -> void:
     panel.add_theme_constant_override("separation", 12)
     add_child(panel)
     var heading := Label.new()
-    heading.text = "ОБ ИГРЕ" if section == "about" else ("ЗВУК • HD AUDIO" if section == "sound" else ("ВЫБЕРИ СЛОЖНОСТЬ" if choose_difficulty else ("ДОБРО ПОЖАЛОВАТЬ!" if section == "" else ("ШАШКИ" if section == "checkers" else "ФУТБОЛ"))))
+    heading.text = "ЗВУК • HD AUDIO" if section == "sound" else ("ВЫБЕРИ СЛОЖНОСТЬ" if choose_difficulty else ("ДОБРО ПОЖАЛОВАТЬ!" if section == "" else ("ШАШКИ" if section == "checkers" else "ФУТБОЛ")))
     heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     heading.add_theme_font_size_override("font_size", 27)
     heading.add_theme_color_override("font_color", Color("#f5dca6"))
@@ -180,16 +180,6 @@ func _build() -> void:
         _button("♟  ШАШКИ", func(): section = "checkers"; _build())
         _button("⚽  ФУТБОЛ", func(): section = "football"; _build())
         _button("♫  ЗВУК И МУЗЫКА", func(): section = "sound"; _build())
-        _button("ⓘ  ОБ ИГРЕ", func(): section = "about"; _build())
-    elif section == "about":
-        var credits: Label = Label.new()
-        credits.text = "MONSTER BALL · HALLOWEEN\n\nПроект: Volfdog\n© 2026 Volfdog — оригинальные материалы проекта\n\nМузыка: Vampire's Piano — TAD (CC0)\nИсточник: OpenGameArt.org\n\nЗвук трибун: Ambient Sports Crowd Sound\nИсточник: Mixkit · Free Sound Effects License\n\nСторонние материалы используются\nпо условиям соответствующих лицензий."
-        credits.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-        credits.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        credits.add_theme_font_size_override("font_size", 14)
-        credits.add_theme_color_override("font_color", Color("#f6e6c4"))
-        panel.add_child(credits)
-        _button("← НАЗАД", func(): section = ""; _build())
     elif section == "sound":
         _button("🔊 ВЫКЛЮЧИТЬ ЗВУК" if not bool(get_tree().root.get_meta("mb_muted", false)) else "🔇 ВКЛЮЧИТЬ ЗВУК", func():
             get_tree().root.set_meta("mb_muted", not bool(get_tree().root.get_meta("mb_muted", false)))
