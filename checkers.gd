@@ -14,6 +14,10 @@ var finished: bool = false
 var winning_team: int = 0
 # Checkers-only draw bookkeeping (one completed turn is one ply).
 var draw_reason: String = ""
+# Alternate first move after an initial random magical coin toss.
+const OPENING_COIN_SECONDS: float = 2.8
+var opening_coin: float = 0.0
+var opening_team: int = 1
 var position_visits: Dictionary = {}
 var material_quiet_plies: int = 0
 var king_only_plies: int = 0
@@ -145,6 +149,12 @@ func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     player.play()
 
 func _process(delta: float) -> void:
+    if opening_coin > 0.0:
+        opening_coin = maxf(0.0, opening_coin - delta)
+        if opening_coin <= 0.0:
+            message = "Ход синих" if turn == 1 else "Ход красных"
+            _schedule_bot()
+        queue_redraw()
     # Retry occasionally if Safari suspended a background player.
     if game_audio_unlocked:
         background_audio_poll += delta
@@ -693,7 +703,7 @@ func _drag_is_own_piece(cell: Vector2i) -> bool:
     return not finished and not bot_pending and (game_mode != 0 or turn == 1) and int(_piece(cell)["team"]) == turn and (forced.x < 0 or cell == forced)
 
 func _drag_can_start(point: Vector2) -> bool:
-    return not customization_open and pending_skin < 0 and not finished and not bot_pending and fx_progress >= 0.99 and (game_mode != 0 or turn == 1)
+    return opening_coin <= 0.0 and not customization_open and pending_skin < 0 and not finished and not bot_pending and fx_progress >= 0.99 and (game_mode != 0 or turn == 1)
 
 func _draw_drag_piece_overlay(side: float) -> void:
     if not drag_active or not drag_moved or not _inside(drag_origin):
@@ -809,7 +819,6 @@ func _ready() -> void:
         var path: String = "res://assets/%s.png" % name
         if ResourceLoader.exists(path):
             textures[name] = load(path)
-    _new_game()
     game_mode = int(get_tree().root.get_meta("mb_mode", 0))
     bot_difficulty = clampi(int(get_tree().root.get_meta("mb_bot_difficulty", 1)), 0, 2)
     customization_open = bool(get_tree().root.get_meta("mb_customize", false))
@@ -819,8 +828,13 @@ func _ready() -> void:
     if get_tree().root.has_meta("mb_checkers_king"):
         var saved_king: Array = get_tree().root.get_meta("mb_checkers_king")
         for j in mini(saved_king.size(), 2): king_skin[j] = int(saved_king[j])
+    _new_game()
 
 func _new_game() -> void:
+    # Preserve alternation across games and scene changes in this app session.
+    opening_team = int(get_tree().root.get_meta("mb_checkers_next_first", randi_range(1, 2)))
+    get_tree().root.set_meta("mb_checkers_next_first", 3 - opening_team)
+    opening_coin = OPENING_COIN_SECONDS
     win_celebration_time = 0.0
     win_celebration_seen = false
     fx_progress = 1.0
@@ -835,7 +849,7 @@ func _new_game() -> void:
                 elif r > 4: side = 1
             line.append({"team":side, "king":false})
         board.append(line)
-    turn = 1
+    turn = opening_team
     selected = Vector2i(-1,-1)
     forced = Vector2i(-1,-1)
     finished = false
@@ -848,7 +862,7 @@ func _new_game() -> void:
     three_kings_vs_one_plies = 0
     _reset_turn_draw_flags()
     position_visits[_position_key()] = 1
-    message = "Ход синих"
+    message = "ПЕРВЫМИ ХОДЯТ СИНИЕ" if opening_team == 1 else "ПЕРВЫМИ ХОДЯТ КРАСНЫЕ"
     queue_redraw()
 
 # Russian draughts: no legal move loses. Repeated positions and prolonged
@@ -1074,6 +1088,9 @@ func _tap(p: Vector2i) -> void:
 func _gui_input(event: InputEvent) -> void:
     if (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
         _unlock_game_audio()
+    if opening_coin > 0.0:
+        accept_event()
+        return
     if _drag_event(event):
         accept_event()
         return
@@ -1108,6 +1125,23 @@ func _gui_input(event: InputEvent) -> void:
     var o: Vector2 = g["origin"]
     var p := Vector2i(int(floor((pos.y-o.y)/s)),int(floor((pos.x-o.x)/s)))
     if _inside(p): _tap(p)
+
+func _draw_checkers_coin() -> void:
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.82))
+    var t: float = 1.0 - opening_coin / OPENING_COIN_SECONDS
+    var center: Vector2 = size * 0.5 + Vector2(0, -24.0 - sin(t * PI) * 43.0)
+    var squash: float = maxf(0.14, absf(cos(t * PI * 6.0))) if t < 0.72 else 1.0
+    var aura: Color = Color("#42d9ff") if opening_team == 1 else Color("#fa526c")
+    draw_circle(center, 75.0, Color(aura.r, aura.g, aura.b, 0.08 + t * 0.19))
+    var ellipse_points: PackedVector2Array = PackedVector2Array()
+    for i in 32:
+        var angle: float = TAU * float(i) / 32.0
+        ellipse_points.append(center + Vector2(cos(angle) * squash * 49.0, sin(angle) * 49.0))
+    draw_colored_polygon(ellipse_points, Color("#bb8744"))
+    if t >= 0.72:
+        _magic_ring(center, 56.0, aura, true)
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.31), "МАГИЧЕСКАЯ МОНЕТА", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 23, Color("#ffe3a1"))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.66), "ПЕРВЫМИ СИНИЕ!" if opening_team == 1 else "ПЕРВЫМИ КРАСНЫЕ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 24, aura)
 
 func _draw() -> void:
     var g: Dictionary = _geometry()
@@ -1164,6 +1198,8 @@ func _draw() -> void:
     if win_celebration_time > 0.0:
         _draw_halloween_party(1.0 - win_celebration_time / WIN_CELEBRATION_DURATION, winning_team, true)
     _draw_bottom_actions()
+    if opening_coin > 0.0:
+        _draw_checkers_coin()
     if customization_open:
         _draw_customization(font)
         _confirmation_ui()
@@ -1208,7 +1244,7 @@ func _draw_customization(font: Font) -> void:
     draw_string(font, Vector2(14, size.y - 25), "ЗАКРЫТЬ", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
 
 func _schedule_bot() -> void:
-    if bot_pending or finished or game_mode != 0 or turn != 2:
+    if bot_pending or finished or opening_coin > 0.0 or game_mode != 0 or turn != 2:
         return
     bot_pending = true
     _bot_move.call_deferred()

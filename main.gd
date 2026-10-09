@@ -23,6 +23,29 @@ var game_over := false
 var bot_pending := false
 var winner := 0
 
+# Football 3.1: two halves, action-based match clock, anti-stalling move clock.
+const HALF_SECONDS: int = 120
+const ACTION_SECONDS: int = 4
+const DECISION_SECONDS: float = 20.0
+const HALF_BREAK_SECONDS: float = 7.0
+const COIN_SECONDS: float = 2.8
+var half_number: int = 1
+var half_remaining: int = HALF_SECONDS
+var first_kickoff_team: int = 1
+var active_kickoff_team: int = 1
+var decision_remaining: float = DECISION_SECONDS
+var coin_remaining: float = 0.0
+var halftime_remaining: float = 0.0
+var opening_second_half: float = 0.0
+var paused_match: bool = false
+var phase_after_goal: bool = false
+var consecutive_passes: int = 0
+var last_pass_sender: int = -1
+var pass_side: int = 0
+var ball_wiggle: float = 0.0
+var referee_warning: bool = false
+var halftime_player: AudioStreamPlayer
+
 # The goal is celebrated BEFORE resetting the pitch or showing the winner panel.
 var celebrating: bool = false
 var celebration_time: float = 0.0
@@ -101,6 +124,11 @@ func _setup_game_audio() -> void:
         else:
             crowd_ambience.stream = sound_library[crowd_key]
         crowd_ambience.finished.connect(_restart_crowd_ambience)
+    halftime_player = AudioStreamPlayer.new()
+    halftime_player.name = "HalftimeJingle"
+    add_child(halftime_player)
+    if ResourceLoader.exists("res://audio/halftime_jingle.mp3"):
+        halftime_player.stream = load("res://audio/halftime_jingle.mp3")
     _refresh_background_volumes()
 
 func _refresh_background_volumes() -> void:
@@ -113,10 +141,14 @@ func _refresh_background_volumes() -> void:
         arena_music.volume_db = linear_to_db(maxf(0.001, music_volume * 0.60))
         if muted or music_volume <= 0.005:
             arena_music.stop()
+    if halftime_player != null:
+        halftime_player.volume_db = linear_to_db(maxf(0.001, music_volume * 0.78))
+        if muted or music_volume <= 0.005:
+            halftime_player.stop()
     if crowd_ambience != null:
         # The original crowd WAV is quiet; do not attenuate it again.
         var crowd_balance: float = 0.53 if sound_library.has("stadium_crowd") else 1.10
-        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * crowd_balance))
+        crowd_ambience.volume_db = linear_to_db(maxf(0.001, crowd_volume * crowd_balance * (0.33 if halftime_remaining > 0.0 else 1.0)))
         if muted or crowd_volume <= 0.005:
             crowd_ambience.stop()
 
@@ -168,14 +200,43 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
+    # Play clocks remain frozen during celebrations, coin toss and halftime.
+    if coin_remaining > 0.0:
+        coin_remaining = maxf(0.0, coin_remaining - delta)
+        if coin_remaining <= 0.0:
+            _schedule_bot()
+        queue_redraw()
+    elif halftime_remaining > 0.0:
+        halftime_remaining = maxf(0.0, halftime_remaining - delta)
+        if halftime_remaining <= 0.0:
+            _begin_second_half()
+        queue_redraw()
+    elif opening_second_half > 0.0:
+        opening_second_half = maxf(0.0, opening_second_half - delta)
+        if opening_second_half <= 0.0:
+            _schedule_bot()
+        queue_redraw()
     if celebrating:
         celebration_time = maxf(0.0, celebration_time - delta)
         if celebration_time <= 0.0:
             celebrating = false
-            if not game_over:
+            if phase_after_goal:
+                phase_after_goal = false
+                _resolve_half_boundary()
+            elif not game_over:
                 var completed_reason: String = celebration_reason
-                _reset_board()
+                _reset_board(3 - celebration_team)
                 message = "%s  %d : %d" % [completed_reason, scores[0], scores[1]]
+                _schedule_bot()
+        queue_redraw()
+    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and not bot_pending and (game_mode == 1 or turn == 1):
+        decision_remaining = maxf(0.0, decision_remaining - delta)
+        referee_warning = decision_remaining <= 5.0
+        if decision_remaining <= 0.0:
+            _auto_human_action()
+        queue_redraw()
+    if ball_wiggle > 0.0:
+        ball_wiggle = maxf(0.0, ball_wiggle - delta)
         queue_redraw()
     magic_clock += delta
     if fmod(magic_clock, 0.11) < delta: queue_redraw()
@@ -718,7 +779,7 @@ func _drag_is_own_piece(cell: Vector2i) -> bool:
     return i >= 0 and int(pieces[i]["team"]) == turn
 
 func _drag_can_start(point: Vector2) -> bool:
-    return not celebrating and not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
+    return not paused_match and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not celebrating and not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
 
 func _draw_drag_piece_overlay(side: float) -> void:
     if not drag_active or not drag_moved or selected < 0 or selected >= pieces.size():
@@ -828,26 +889,24 @@ func _living(team_id: int) -> int:
             n += 1
     return n
 
-func _award_point(team_id: int, reason: String) -> void:
+func _award_point(team_id: int, reason: String, spend_clock: bool = true) -> void:
     if celebrating or game_over:
         return
     scores[team_id - 1] += 1
     celebrating = true
     celebration_team = team_id
     celebration_reason = reason
-    celebration_final = scores[team_id - 1] >= 3
-    celebration_duration = 4.2 if celebration_final else 3.2
+    # No 3-goal cap: the winner is decided at the end of the second half.
+    celebration_final = false
+    celebration_duration = 3.2
     celebration_time = celebration_duration
     selected = -1
     bot_pending = false
     message = "%s  %d : %d" % [reason, scores[0], scores[1]]
-    if celebration_final:
-        winner = team_id
-        game_over = true
+    if spend_clock:
+        _advance_match_clock()
     _play_sfx("goal")
     _play_sfx("crowd", "crowd")
-    if celebration_final:
-        _play_sfx("victory")
     queue_redraw()
 
 func _check_elimination() -> bool:
@@ -865,7 +924,11 @@ func _ready() -> void:
     if ResourceLoader.exists("res://assets/game_font.ttf"):
         fancy_font = load("res://assets/game_font.ttf")
     _load_fantasy_assets()
-    _reset_board()
+    first_kickoff_team = randi_range(1, 2)
+    half_number = 1
+    half_remaining = HALF_SECONDS
+    _reset_board(first_kickoff_team)
+    coin_remaining = COIN_SECONDS
     game_mode = int(get_tree().root.get_meta("mb_mode", 0))
     bot_difficulty = clampi(int(get_tree().root.get_meta("mb_bot_difficulty", 1)), 0, 2)
     customization_open = bool(get_tree().root.get_meta("mb_customize", false))
@@ -881,9 +944,18 @@ func _ready() -> void:
             for j in mini(saved.size(), piece_skins.size()):
                 piece_skins[j] = clampi(int(saved[j]), 0, 3)
 
-func _reset_board() -> void:
+func _reset_board(kickoff_team: int = 1) -> void:
     celebrating = false
     celebration_time = 0.0
+    active_kickoff_team = kickoff_team
+    consecutive_passes = 0
+    last_pass_sender = -1
+    pass_side = 0
+    paused_match = false
+    if halftime_player != null:
+        halftime_player.stop()
+    decision_remaining = DECISION_SECONDS
+    referee_warning = false
     pieces.clear()
     fx_progress = 1.0
     fx_impact_time = 0.0
@@ -894,15 +966,184 @@ func _reset_board() -> void:
         pieces.append({"team": 1, "cell": cell, "alive": true})
     for cell in [Vector2i(0, 0), Vector2i(0, 2), Vector2i(0, 4), Vector2i(0, 6), Vector2i(1, 3)]:
         pieces.append({"team": 2, "cell": cell, "alive": true})
-    ball_cell = Vector2i(4, 4)
-    ball_holder = -1
+    # The team granted kickoff begins with the ball at its forward player.
+    ball_holder = 4 if kickoff_team == 1 else 9
+    ball_cell = pieces[ball_holder]["cell"]
     selected = -1
-    turn = 1
-    game_over = false
-    winner = 0
+    turn = kickoff_team
     bot_pending = false
-    message = "Ход голубых"
+    message = "ПЕРВЫМИ ИГРАЮТ СИНИЕ!" if kickoff_team == 1 else "ПЕРВЫМИ ИГРАЮТ КРАСНЫЕ!"
     queue_redraw()
+
+# === Monster Ball 3.1 match director ===
+func _new_match() -> void:
+    scores = [0, 0]
+    winner = 0
+    game_over = false
+    phase_after_goal = false
+    half_number = 1
+    half_remaining = HALF_SECONDS
+    first_kickoff_team = randi_range(1, 2)
+    _reset_board(first_kickoff_team)
+    coin_remaining = COIN_SECONDS
+    queue_redraw()
+
+func _advance_match_clock() -> bool:
+    half_remaining = maxi(0, half_remaining - ACTION_SECONDS)
+    decision_remaining = DECISION_SECONDS
+    referee_warning = false
+    if half_remaining == 0:
+        if celebrating:
+            phase_after_goal = true
+        else:
+            _resolve_half_boundary()
+        return true
+    return false
+
+func _resolve_half_boundary() -> void:
+    if half_number == 1:
+        halftime_remaining = HALF_BREAK_SECONDS
+        if halftime_player != null and halftime_player.stream != null and not bool(get_tree().root.get_meta("mb_muted", false)):
+            halftime_player.play()
+        selected = -1
+        bot_pending = false
+        message = "ПЕРЕРЫВ!  %d : %d" % [scores[0], scores[1]]
+    else:
+        _finish_match()
+    queue_redraw()
+
+func _begin_second_half() -> void:
+    half_number = 2
+    half_remaining = HALF_SECONDS
+    _reset_board(3 - first_kickoff_team)
+    opening_second_half = 2.0
+    message = "2-Й ТАЙМ! РАЗЫГРЫВАЮТ СИНИЕ" if turn == 1 else "2-Й ТАЙМ! РАЗЫГРЫВАЮТ КРАСНЫЕ"
+    queue_redraw()
+
+func _finish_match() -> void:
+    game_over = true
+    bot_pending = false
+    selected = -1
+    winner = 1 if scores[0] > scores[1] else (2 if scores[1] > scores[0] else 0)
+    message = "КОНЕЦ МАТЧА — НИЧЬЯ!" if winner == 0 else "ФИНАЛЬНЫЙ СВИСТОК!"
+    if winner != 0:
+        celebrating = true
+        celebration_time = 3.6
+        celebration_duration = 3.6
+        celebration_final = true
+        celebration_team = winner
+        _play_sfx("victory")
+        _play_sfx("crowd", "crowd")
+    queue_redraw()
+
+func _auto_human_action() -> void:
+    if bot_pending or celebrating or game_over or paused_match:
+        return
+    drag_active = false
+    drag_moved = false
+    drag_input_touch = false
+    drag_origin = Vector2i(-1, -1)
+    var options: Array[Dictionary] = _fb_ai_choices(turn)
+    if options.is_empty():
+        _award_point(3 - turn, "СУДЬЯ: НЕТ ДОПУСТИМЫХ ХОДОВ!")
+        return
+    # Timeout never gives free ball possession; it selects a legal action.
+    var action: Dictionary = options[0]
+    for candidate in options:
+        if not candidate.has("pass_to"):
+            action = candidate
+            break
+    selected = int(action["piece"])
+    if action.has("pass_to"):
+        _pass_ball(int(action["pass_to"]))
+        return
+    if int(action["victim"]) >= 0:
+        var victim: int = int(action["victim"])
+        pieces[victim]["alive"] = false
+        _start_hit_fx(pieces[victim]["cell"])
+        if ball_holder == victim:
+            ball_holder = selected
+    _move_selected(action["to"])
+    if _check_elimination() or _check_goal():
+        return
+    if int(action["victim"]) >= 0:
+        for n in FOOTBALL_TEAM_SIZE:
+            var chain: Array = _captures(selected)
+            if chain.is_empty():
+                break
+            var nxt: Dictionary = chain[0]
+            var victim_index: int = int(nxt["victim"])
+            pieces[victim_index]["alive"] = false
+            if ball_holder == victim_index:
+                ball_holder = selected
+            _move_selected(nxt["cell"])
+            if _check_elimination() or _check_goal():
+                return
+    _finish_turn()
+
+func _draw_referee(at: Vector2, sc: float) -> void:
+    # On-pitch judge sprite drawn in the arena margin: never occupies a board square.
+    var shadow: Color = Color("#16131e")
+    draw_circle(at + Vector2(0, -18) * sc, 12.0 * sc, Color("#e9e4db"))
+    draw_rect(Rect2(at + Vector2(-8,-15) * sc, Vector2(16,25) * sc), shadow)
+    for stripe in 3:
+        draw_rect(Rect2(at + Vector2((-6 + stripe * 5), -13) * sc, Vector2(2,22) * sc), Color("#f5f2dd"))
+    draw_circle(at + Vector2(-4,-19) * sc, 2.4 * sc, Color("#ff9d40"))
+    draw_circle(at + Vector2(4,-19) * sc, 2.4 * sc, Color("#ff9d40"))
+    draw_line(at + Vector2(-8, -2) * sc, at + Vector2(-16, 11) * sc, Color("#e9e4db"), 3.0 * sc)
+    draw_line(at + Vector2(8, -2) * sc, at + Vector2(15, 9) * sc, Color("#e9e4db"), 3.0 * sc)
+    draw_line(at + Vector2(-4,10) * sc, at + Vector2(-7,21) * sc, Color("#e9e4db"), 3.0 * sc)
+    draw_line(at + Vector2(4,10) * sc, at + Vector2(7,21) * sc, Color("#e9e4db"), 3.0 * sc)
+    if referee_warning:
+        draw_rect(Rect2(at + Vector2(-24,-48) * sc, Vector2(13,18) * sc), Color("#ffdd45"))
+        draw_string(ThemeDB.fallback_font, at + Vector2(-155, -39), "СУДЬЯ: ХОДИ!", HORIZONTAL_ALIGNMENT_LEFT, 145, 13, Color("#ffdd63"))
+
+func _draw_coin_toss() -> void:
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.80))
+    var t: float = 1.0 - coin_remaining / COIN_SECONDS
+    var cx: Vector2 = size * 0.5 + Vector2(0, -30 - sin(t * PI) * 50.0)
+    var squash: float = maxf(0.16, absf(cos(t * PI * 6.0))) if t < 0.72 else 1.0
+    var tone: Color = Color("#42d9ff") if first_kickoff_team == 1 else Color("#fa526c")
+    draw_circle(cx, 78.0, Color(tone.r, tone.g, tone.b, 0.10 + 0.25 * t))
+    draw_colored_polygon(PackedVector2Array([cx + Vector2(-48*squash,-48), cx + Vector2(48*squash,-48), cx + Vector2(48*squash,48), cx + Vector2(-48*squash,48)]), Color("#4b3421"))
+    draw_ellipse_31(cx, Vector2(46.0 * squash, 46.0), Color("#d8a64e"))
+    draw_ellipse_31(cx, Vector2(39.0 * squash, 39.0), Color("#88612e"))
+    if t > 0.72:
+        _magic_ring(cx, 58.0, tone, true)
+    _draw_referee(cx + Vector2(0, 120), 1.25)
+    var font: Font = ThemeDB.fallback_font
+    draw_string(font, Vector2(16.0, size.y * 0.32), "ЖЕРЕБЬЁВКА MONSTER BALL", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 24, Color("#ffe2a5"))
+    draw_string(font, Vector2(16.0, size.y * 0.66), "СИНИЕ НАЧИНАЮТ!" if first_kickoff_team == 1 else "КРАСНЫЕ НАЧИНАЮТ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 23, tone)
+
+func draw_ellipse_31(center: Vector2, axes: Vector2, fill_color: Color) -> void:
+    var outline: PackedVector2Array = PackedVector2Array()
+    for k in 32:
+        var theta: float = float(k) * TAU / 32.0
+        outline.append(center + Vector2(cos(theta) * axes.x, sin(theta) * axes.y))
+    draw_colored_polygon(outline, fill_color)
+
+func _draw_halftime_show() -> void:
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.88))
+    var font: Font = ThemeDB.fallback_font
+    draw_string(font, Vector2(10, size.y * 0.22), "ПЕРЕРЫВ — ШОУ МОНСТРОВ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 25, Color("#ffe19b"))
+    draw_string(font, Vector2(10, size.y * 0.31), "СЧЁТ  %d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 26, Color.WHITE)
+    for i in 5:
+        var xx: float = (float(i) + 0.65) * size.x / 5.5
+        var yy: float = size.y * 0.54 + sin(magic_clock * (3.0 + i * 0.15) + i) * 19.0
+        _draw_halloween_spectator(i, Vector2(xx, yy), 1.40, float(i))
+    draw_string(font, Vector2(10, size.y * 0.78), "ВТОРОЙ ТАЙМ ЧЕРЕЗ %d" % ceili(halftime_remaining), HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 20, Color("#ffd487"))
+
+func _draw_second_half_start() -> void:
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.75))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.48), "ВТОРОЙ ТАЙМ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 33, Color("#ffe4a0"))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.55), "НАЧИНАЮТ СИНИЕ" if turn == 1 else "НАЧИНАЮТ КРАСНЫЕ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 19, Color("#4ac5e8") if turn == 1 else Color("#e45a78"))
+
+func _draw_pause_screen() -> void:
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.76))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.5), "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 35, Color("#ffcc80"))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.58), "Нажми ПАУЗА сверху, чтобы продолжить", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 16, Color.WHITE)
+    draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 30.0), Color("#584166"))
+    draw_string(ThemeDB.fallback_font, Vector2(size.x - 99.0, 93.0), "ПРОДОЛЖИТЬ", HORIZONTAL_ALIGNMENT_LEFT, 95.0, 12, Color.WHITE)
 
 func _geometry() -> Dictionary:
     var top_margin := 154.0
@@ -956,11 +1197,18 @@ func _can_pass(from_index: int, to_index: int) -> bool:
         return false
     var from_cell: Vector2i = pieces[from_index]["cell"]
     var to_cell: Vector2i = pieces[to_index]["cell"]
+    if consecutive_passes >= 2 and pass_side == turn:
+        return false
+    if last_pass_sender == to_index and pass_side == turn:
+        return false
     return absi(to_cell.x - from_cell.x) == 1 and absi(to_cell.y - from_cell.y) == 1
 
 func _pass_ball(to_index: int) -> void:
     if not _can_pass(ball_holder, to_index):
         return
+    last_pass_sender = ball_holder
+    pass_side = turn
+    consecutive_passes += 1
     pass_fx_from = pieces[ball_holder]["cell"]
     pass_fx_to = pieces[to_index]["cell"]
     pass_fx_progress = 0.0
@@ -976,7 +1224,7 @@ func _pass_ball(to_index: int) -> void:
     var score_before: Array = scores.duplicate()
     _finish_turn()
     # Keep the goal message if the other team's lone carrier gets stuck.
-    if not game_over and scores == score_before:
+    if not game_over and halftime_remaining <= 0.0 and scores == score_before:
         message = "ПАС! " + ("Ход голубых" if turn == 1 else "Ход красных")
     queue_redraw()
 
@@ -1001,12 +1249,26 @@ func _check_last_carrier_stuck(team_id: int) -> bool:
         return false
     if _carrier_has_move(ball_holder):
         return false
-    _award_point(3 - team_id, "МЯЧ ЗАБЛОКИРОВАН — ГОЛ СОПЕРНИКА!")
+    _award_point(3 - team_id, "МЯЧ ЗАБЛОКИРОВАН — ГОЛ СОПЕРНИКА!", false)
     return true
 
 func _gui_input(event: InputEvent) -> void:
     if (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
         _unlock_game_audio()
+        var touch_point: Vector2 = event.position
+        # Touching the pumpkin makes it wobble without changing possession.
+        if not celebrating and not customization_open and not game_over:
+            var ball_pos: Vector2 = _drag_cell_center(ball_cell)
+            if touch_point.distance_to(ball_pos) <= float(_geometry()["cell_size"]) * 0.45:
+                ball_wiggle = 0.65
+        if touch_point.y < 115.0 and touch_point.x > size.x - 107.0 and coin_remaining <= 0.0 and halftime_remaining <= 0.0:
+            paused_match = not paused_match
+            queue_redraw()
+            accept_event()
+            return
+    if paused_match or coin_remaining > 0.0 or halftime_remaining > 0.0 or opening_second_half > 0.0:
+        accept_event()
+        return
     if _drag_event(event):
         accept_event()
         return
@@ -1030,8 +1292,7 @@ func _gui_input(event: InputEvent) -> void:
         if point.x >= size.x * 0.5:
             _go_to_main_menu()
             return
-        scores = [0, 0]
-        _reset_board()
+        _new_match()
         return
     if game_over or bot_pending or (game_mode == 0 and turn == 2):
         return
@@ -1116,6 +1377,12 @@ func _tap(cell: Vector2i) -> void:
 func _move_selected(cell: Vector2i) -> void:
     var previous: Vector2i = pieces[selected]["cell"]
     _start_move_fx(selected, previous, cell)
+    # Rival moves do NOT clear the other team's pass chain.
+    # Only movement by the passing side, or a change of ball possession, does.
+    if pass_side == int(pieces[selected]["team"]) or ball_holder == selected:
+        consecutive_passes = 0
+        last_pass_sender = -1
+        pass_side = 0
     pieces[selected]["cell"] = cell
     if ball_holder == selected:
         ball_cell = cell
@@ -1140,7 +1407,11 @@ func _check_goal() -> bool:
 
 func _finish_turn() -> void:
     selected = -1
+    if _advance_match_clock():
+        return
     turn = 2 if turn == 1 else 1
+    decision_remaining = DECISION_SECONDS
+    referee_warning = false
     message = "Ход голубых" if turn == 1 else "Ход красных"
     # Check as soon as the blocked team would receive the turn.
     if _check_last_carrier_stuck(turn):
@@ -1150,7 +1421,7 @@ func _finish_turn() -> void:
         _schedule_bot()
 
 func _schedule_bot() -> void:
-    if bot_pending or game_over or turn != 2:
+    if bot_pending or game_over or celebrating or paused_match or coin_remaining > 0.0 or halftime_remaining > 0.0 or opening_second_half > 0.0 or turn != 2:
         return
     bot_pending = true
     _bot_turn.call_deferred()
@@ -1181,16 +1452,25 @@ func _fb_ai_choices(side: int) -> Array[Dictionary]:
                     continue
                 var dest: Vector2i = pieces[j]["cell"]
                 if absi(src.x - dest.x) == 1 and absi(src.y - dest.y) == 1:
+                    if pass_side == side and (consecutive_passes >= 2 or last_pass_sender == j):
+                        continue
                     free_moves.append({"piece":i, "pass_to":j})
     return forced_moves if not forced_moves.is_empty() else free_moves
 
 func _fb_ai_apply(move: Dictionary) -> void:
     var mover: int = int(move["piece"])
     if move.has("pass_to"):
+        last_pass_sender = mover
+        pass_side = int(pieces[mover]["team"])
+        consecutive_passes += 1
         ball_holder = int(move["pass_to"])
         ball_cell = pieces[ball_holder]["cell"]
         return
     var victim: int = int(move["victim"])
+    if pass_side == int(pieces[mover]["team"]) or ball_holder == mover or (victim >= 0 and ball_holder == victim):
+        consecutive_passes = 0
+        last_pass_sender = -1
+        pass_side = 0
     if victim >= 0:
         pieces[victim]["alive"] = false
         if ball_holder == victim:
@@ -1285,12 +1565,18 @@ func _fb_ai_search(side: int, depth: int, alpha: int, beta: int) -> int:
         var old_pieces: Array[Dictionary] = pieces
         var old_holder: int = ball_holder
         var old_cell: Vector2i = ball_cell
+        var old_chain: int = consecutive_passes
+        var old_sender: int = last_pass_sender
+        var old_side: int = pass_side
         pieces = old_pieces.duplicate(true)
         _fb_ai_apply(move)
         var merit: int = _fb_ai_value()
         pieces = old_pieces
         ball_holder = old_holder
         ball_cell = old_cell
+        consecutive_passes = old_chain
+        last_pass_sender = old_sender
+        pass_side = old_side
         ranked.append({"action":move, "merit":merit})
     ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
         return int(a["merit"]) > int(b["merit"]) if side == 2 else int(a["merit"]) < int(b["merit"])
@@ -1301,12 +1587,18 @@ func _fb_ai_search(side: int, depth: int, alpha: int, beta: int) -> int:
         var snapshot: Array[Dictionary] = pieces
         var previous_holder: int = ball_holder
         var previous_cell: Vector2i = ball_cell
+        var previous_chain: int = consecutive_passes
+        var previous_sender: int = last_pass_sender
+        var previous_side: int = pass_side
         pieces = snapshot.duplicate(true)
         _fb_ai_apply(action)
         var score: int = _fb_ai_search(3 - side, depth - 1, alpha, beta)
         pieces = snapshot
         ball_holder = previous_holder
         ball_cell = previous_cell
+        consecutive_passes = previous_chain
+        last_pass_sender = previous_sender
+        pass_side = previous_side
         if side == 2:
             best = maxi(best, score)
             alpha = maxi(alpha, best)
@@ -1325,12 +1617,18 @@ func _fb_choose_action(moves: Array[Dictionary], depth: int) -> Dictionary:
         var snapshot: Array[Dictionary] = pieces
         var previous_holder: int = ball_holder
         var previous_cell: Vector2i = ball_cell
+        var previous_chain: int = consecutive_passes
+        var previous_sender: int = last_pass_sender
+        var previous_side: int = pass_side
         pieces = snapshot.duplicate(true)
         _fb_ai_apply(move)
         var score: int = _fb_ai_search(1, depth - 1, -60000, 60000)
         pieces = snapshot
         ball_holder = previous_holder
         ball_cell = previous_cell
+        consecutive_passes = previous_chain
+        last_pass_sender = previous_sender
+        pass_side = previous_side
         if score > best_score:
             best_score = score
             best = move
@@ -1341,13 +1639,12 @@ func _bot_turn() -> void:
         return
     await get_tree().create_timer(0.77).timeout
     bot_pending = false
-    if game_mode != 0 or turn != 2 or game_over:
+    if game_mode != 0 or turn != 2 or game_over or paused_match or celebrating or coin_remaining > 0.0 or halftime_remaining > 0.0:
         return
     var candidates: Array[Dictionary] = _fb_ai_choices(2)
     if candidates.is_empty():
-        message = "Бот не может сделать ход"
-        turn = 1
-        queue_redraw()
+        message = "У красных нет допустимых ходов"
+        _award_point(1, "БЛОКИРОВКА — ГОЛ СИНИХ!")
         return
     var best: Dictionary
     if bot_difficulty == 0:
@@ -1401,7 +1698,13 @@ func _draw() -> void:
     var font: Font = ThemeDB.fallback_font
     draw_string(font, Vector2(18, 27), "MONSTER BALL  /  HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36.0, 18, Color("#ffc079"))
     draw_string(font, Vector2(18, 48), "%d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#dffcff"))
-    draw_string(font, Vector2(18, 68), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 16, Color("#d9f6f9"))
+    draw_string(font, Vector2(18, 68), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 14, Color("#d9f6f9"))
+    draw_string(font, Vector2(18, 88), "%d-Й ТАЙМ   %02d:%02d | ХОД %02d" % [half_number, half_remaining / 60, half_remaining % 60, ceili(decision_remaining)], HORIZONTAL_ALIGNMENT_LEFT, size.x - 134.0, 14, Color("#ffdc83"))
+    if consecutive_passes > 0:
+        draw_string(font, Vector2(18, 111), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_LEFT, size.x - 145.0, 13, Color("#ffcb83"))
+    draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 29.0), Color("#30283c"))
+    draw_string(font, Vector2(size.x - 99.0, 93.0), "ПРОДОЛЖИТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_LEFT, 95, 12, Color("#fff2d8"))
+    _draw_referee(Vector2(size.x - 25.0, 147.0), 0.85)
     # Fantasy stone board. Geometry and input coordinates stay unchanged.
     var board_size := Vector2(COLS * side, ROWS * side)
     draw_rect(Rect2(offset - Vector2(6, 6), board_size + Vector2(12, 12)), Color("#0b1925"))
@@ -1484,11 +1787,15 @@ func _draw() -> void:
             _draw_fantasy_token(token_center, side * 0.37, team, i)
         if ball_holder == i and pass_fx_progress >= 1.0:
             var pumpkin_center := token_center + Vector2(side * 0.17, -side * 0.20)
+            if ball_wiggle > 0.0:
+                pumpkin_center += Vector2(sin(magic_clock * 26.0) * side * 0.10, cos(magic_clock * 22.0) * side * 0.06) * (ball_wiggle / 0.65)
             var pumpkin_size := side * 0.50
             if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
                 _draw_ghost_pumpkin(pumpkin_center, side * 0.16)
     if ball_holder == -1:
         var pumpkin_center := offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side
+        if ball_wiggle > 0.0:
+            pumpkin_center += Vector2(sin(magic_clock * 26.0) * side * 0.10, cos(magic_clock * 22.0) * side * 0.06) * (ball_wiggle / 0.65)
         var pumpkin_size := side * 0.90
         if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
             _draw_ghost_pumpkin(pumpkin_center, side * 0.23)
@@ -1498,13 +1805,21 @@ func _draw() -> void:
     if celebrating:
         _draw_halloween_party(1.0 - celebration_time / maxf(0.01, celebration_duration), celebration_team, celebration_final)
     _draw_bottom_actions()
+    if coin_remaining > 0.0:
+        _draw_coin_toss()
+    elif halftime_remaining > 0.0:
+        _draw_halftime_show()
+    elif opening_second_half > 0.0:
+        _draw_second_half_start()
+    elif paused_match:
+        _draw_pause_screen()
     if game_over and not celebrating:
         var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
         draw_rect(panel, Color("#15111eef"))
         draw_rect(panel, Color("#f6cf65"), false, 3.0)
-        var heading := "ПОЗДРАВЛЯЕМ С ПОБЕДОЙ!" if (game_mode == 1 or winner == 1) else "ВЫ ПРОИГРАЛИ!"
+        var heading := ("НИЧЬЯ!" if winner == 0 else ("ПОЗДРАВЛЯЕМ С ПОБЕДОЙ!" if (game_mode == 1 or winner == 1) else "ВЫ ПРОИГРАЛИ!"))
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 52), heading, HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 24, Color.WHITE)
-        var detail := "Победили голубые" if winner == 1 else "Победили красные"
+        var detail := "Равный счёт" if winner == 0 else ("Победили голубые" if winner == 1 else "Победили красные")
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 87), "%s · Счёт %d : %d" % [detail, scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color("#f6cf65"))
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 117), "Нажми НОВАЯ ИГРА, чтобы сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 14, Color.WHITE)
 
