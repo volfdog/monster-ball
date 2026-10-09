@@ -12,6 +12,16 @@ var forced: Vector2i = Vector2i(-1,-1)
 var message: String = "Ход синих"
 var finished: bool = false
 var winning_team: int = 0
+# Checkers-only draw bookkeeping (one completed turn is one ply).
+var draw_reason: String = ""
+var position_visits: Dictionary = {}
+var material_quiet_plies: int = 0
+var king_only_plies: int = 0
+var three_kings_vs_one_plies: int = 0
+# Remember a whole capture chain, not just its last jump.
+var turn_had_capture: bool = false
+var turn_had_promotion: bool = false
+var turn_only_kings: bool = true
 var win_celebration_time: float = 0.0
 var win_celebration_seen: bool = false
 const WIN_CELEBRATION_DURATION := 3.3
@@ -141,7 +151,7 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
-    if finished and not win_celebration_seen:
+    if finished and winning_team != 0 and not win_celebration_seen:
         win_celebration_seen = true
         win_celebration_time = WIN_CELEBRATION_DURATION
         _play_sfx("victory")
@@ -830,9 +840,118 @@ func _new_game() -> void:
     forced = Vector2i(-1,-1)
     finished = false
     winning_team = 0
+    draw_reason = ""
     bot_pending = false
+    position_visits.clear()
+    material_quiet_plies = 0
+    king_only_plies = 0
+    three_kings_vs_one_plies = 0
+    _reset_turn_draw_flags()
+    position_visits[_position_key()] = 1
     message = "Ход синих"
     queue_redraw()
+
+# Russian draughts: no legal move loses. Repeated positions and prolonged
+# king endings are draws. Count only AFTER all forced jumps of a turn.
+func _reset_turn_draw_flags() -> void:
+    turn_had_capture = false
+    turn_had_promotion = false
+    turn_only_kings = true
+
+func _remember_piece_action(taken: Vector2i, promoted: bool, was_king: bool) -> void:
+    turn_had_capture = turn_had_capture or taken.x >= 0
+    turn_had_promotion = turn_had_promotion or promoted
+    turn_only_kings = turn_only_kings and was_king
+
+func _position_key() -> String:
+    # Include side to play and king status: same positions with a different
+    # player to move are not the same position for threefold repetition.
+    var key: String = str(turn) + ":"
+    for row in board:
+        for piece_data in row:
+            var side_id: int = int(piece_data["team"])
+            if side_id == 0:
+                key += "."
+            elif side_id == 1:
+                key += "B" if bool(piece_data["king"]) else "b"
+            else:
+                key += "R" if bool(piece_data["king"]) else "r"
+    return key
+
+func _draw_status_after_turn() -> String:
+    var blue_total: int = 0
+    var red_total: int = 0
+    var blue_kings: int = 0
+    var red_kings: int = 0
+    for row in board:
+        for piece_data in row:
+            var side_id: int = int(piece_data["team"])
+            if side_id == 1:
+                blue_total += 1
+                if bool(piece_data["king"]): blue_kings += 1
+            elif side_id == 2:
+                red_total += 1
+                if bool(piece_data["king"]): red_kings += 1
+    var total_pieces: int = blue_total + red_total
+    var both_have_kings: bool = blue_kings > 0 and red_kings > 0
+    # Any capture or promotion changes material balance/king status.
+    if turn_had_capture or turn_had_promotion:
+        material_quiet_plies = 0
+    elif both_have_kings and total_pieces >= 2 and total_pieces <= 7:
+        material_quiet_plies += 1
+    else:
+        material_quiet_plies = 0
+    if turn_had_capture or not turn_only_kings:
+        king_only_plies = 0
+    else:
+        king_only_plies += 1
+    var three_vs_one: bool = (blue_kings >= 3 and red_total == 1 and red_kings == 1) or (red_kings >= 3 and blue_total == 1 and blue_kings == 1)
+    if three_vs_one and not turn_had_capture:
+        three_kings_vs_one_plies += 1
+    else:
+        three_kings_vs_one_plies = 0
+    var key: String = _position_key()
+    var occurrences: int = int(position_visits.get(key, 0)) + 1
+    position_visits[key] = occurrences
+    if occurrences >= 3:
+        return "Одна позиция повторилась трижды"
+    # 2022 Russian draughts rules: 5 full turns for a 2/3-piece ending,
+    # 30 full turns for 4/5 and 60 full turns for 6/7 when both have kings.
+    # Every full turn comprises one move by each player, hence 2 plies.
+    var endgame_limit: int = -1
+    if both_have_kings:
+        if total_pieces <= 3:
+            endgame_limit = 10
+        elif total_pieces <= 5:
+            endgame_limit = 60
+        elif total_pieces <= 7:
+            endgame_limit = 120
+    if endgame_limit > 0 and material_quiet_plies >= endgame_limit:
+        return "Дамочное окончание без изменения сил"
+    # Supplementary rules for protracted king play.
+    if (total_pieces >= 4 and total_pieces <= 5 and king_only_plies >= 30) or (total_pieces >= 6 and total_pieces <= 7 and king_only_plies >= 50):
+        return "Слишком долго ходили только дамками"
+    if three_kings_vs_one_plies >= 30:
+        return "Три дамки против одной: истёк лимит ходов"
+    return ""
+
+func _complete_turn() -> void:
+    # Called only after a complete human/bot move or capture sequence.
+    if not _has_move(turn):
+        finished = true
+        winning_team = 3 - turn
+        message = "ВЫ ПРОИГРАЛИ!" if game_mode == 0 and winning_team == 2 else ("ПОБЕДИЛИ СИНИЕ!" if winning_team == 1 else "ПОБЕДИЛИ КРАСНЫЕ!")
+    else:
+        draw_reason = _draw_status_after_turn()
+        if not draw_reason.is_empty():
+            finished = true
+            winning_team = 0
+            win_celebration_seen = true  # do not trigger a VICTORY celebration for a draw
+            win_celebration_time = 0.0
+            message = "НИЧЬЯ!"
+        else:
+            message = "Ход синих" if turn == 1 else "Ход красных"
+    _reset_turn_draw_flags()
 
 func _inside(p: Vector2i) -> bool:
     return p.x >= 0 and p.x < N and p.y >= 0 and p.y < N
@@ -924,6 +1043,7 @@ func _tap(p: Vector2i) -> void:
     for move in available:
         if move["to"] != p: continue
         var data: Dictionary = _piece(selected).duplicate()
+        var was_king: bool = bool(data["king"])
         _start_move_fx(selected, p, move["taken"], data)
         board[selected.x][selected.y] = {"team":0,"king":false}
         board[p.x][p.y] = data
@@ -934,6 +1054,7 @@ func _tap(p: Vector2i) -> void:
         if not data["king"] and (p.x == 0 and turn == 1 or p.x == 7 and turn == 2):
             data["king"] = true
             became_king = true
+        _remember_piece_action(taken, became_king, was_king)
         selected = p
         if taken.x >= 0 and not became_king and not _captures(p).is_empty():
             forced = p
@@ -942,12 +1063,7 @@ func _tap(p: Vector2i) -> void:
             forced = Vector2i(-1,-1)
             selected = Vector2i(-1,-1)
             turn = 3-turn
-            if not _has_move(turn):
-                finished = true
-                winning_team = 3 - turn
-                message = "ПОБЕДИЛИ СИНИЕ!" if winning_team == 1 else "ПОБЕДИЛИ КРАСНЫЕ!"
-            else:
-                message = "Ход синих" if turn == 1 else "Ход красных"
+            _complete_turn()
         queue_redraw()
         if not finished and game_mode == 0 and turn == 2 and forced.x < 0:
             _schedule_bot()
@@ -1273,6 +1389,7 @@ func _bot_move() -> void:
     var dest: Vector2i = best["to"]
     var captured: Vector2i = best["taken"]
     var piece_data: Dictionary = _piece(source).duplicate()
+    var was_king: bool = bool(piece_data["king"])
     _start_move_fx(source, dest, captured, piece_data)
     board[source.x][source.y] = {"team": 0, "king": false}
     board[dest.x][dest.y] = piece_data
@@ -1281,6 +1398,7 @@ func _bot_move() -> void:
     var promoted: bool = not piece_data["king"] and dest.x == 7
     if promoted:
         piece_data["king"] = true
+    _remember_piece_action(captured, promoted, was_king)
     if captured.x >= 0 and not promoted and not _captures(dest).is_empty():
         forced = dest
         selected = dest
@@ -1288,12 +1406,7 @@ func _bot_move() -> void:
         queue_redraw()
         return
     turn = 1
-    if not _has_move(1):
-        finished = true
-        winning_team = 2
-        message = "ВЫ ПРОИГРАЛИ!"
-    else:
-        message = "Ход синих"
+    _complete_turn()
     queue_redraw()
 
 func _bot_continue() -> void:
@@ -1307,7 +1420,7 @@ func _bot_continue() -> void:
         forced = Vector2i(-1, -1)
         selected = Vector2i(-1, -1)
         turn = 1
-        message = "Ход синих"
+        _complete_turn()
         queue_redraw()
         return
     var move: Dictionary = moves[0]
@@ -1320,6 +1433,7 @@ func _bot_continue() -> void:
     var dest: Vector2i = move["to"]
     var victim: Vector2i = move["taken"]
     var data: Dictionary = _piece(forced).duplicate()
+    var was_king: bool = bool(data["king"])
     _start_move_fx(forced, dest, victim, data)
     board[forced.x][forced.y] = {"team": 0, "king": false}
     board[dest.x][dest.y] = data
@@ -1327,6 +1441,7 @@ func _bot_continue() -> void:
     var promoted: bool = not data["king"] and dest.x == 7
     if promoted:
         data["king"] = true
+    _remember_piece_action(victim, promoted, was_king)
     forced = dest
     selected = dest
     if not promoted and not _captures(dest).is_empty():
@@ -1335,10 +1450,7 @@ func _bot_continue() -> void:
         forced = Vector2i(-1, -1)
         selected = Vector2i(-1, -1)
         turn = 1
-        message = "Ход синих" if _has_move(1) else "ВЫ ПРОИГРАЛИ!"
-        if not _has_move(1):
-            finished = true
-            winning_team = 2
+        _complete_turn()
     queue_redraw()
 
 func _go_to_main_menu() -> void:
@@ -1365,8 +1477,9 @@ func _draw_victory_panel() -> void:
     draw_rect(rect, Color("#181522"))
     draw_rect(rect, Color("#ffcb72"), false, 3.0)
     var blue_won: bool = winning_team == 1
-    var heading: String = "ПОЗДРАВЛЯЕМ С ПОБЕДОЙ!" if (game_mode == 1 or blue_won) else "ВЫ ПРОИГРАЛИ!"
-    var detail: String = "ПОБЕДИЛИ СИНИЕ" if blue_won else "ПОБЕДИЛИ КРАСНЫЕ"
+    var is_draw: bool = winning_team == 0
+    var heading: String = "НИЧЬЯ!" if is_draw else ("ПОЗДРАВЛЯЕМ С ПОБЕДОЙ!" if (game_mode == 1 or blue_won) else "ВЫ ПРОИГРАЛИ!")
+    var detail: String = draw_reason if is_draw else ("ПОБЕДИЛИ СИНИЕ" if blue_won else "ПОБЕДИЛИ КРАСНЫЕ")
     draw_string(font, rect.position + Vector2(16, 62), heading, HORIZONTAL_ALIGNMENT_LEFT, panel_width - 32, 22, Color("#ffdc9e"))
     draw_string(font, rect.position + Vector2(16, 104), detail, HORIZONTAL_ALIGNMENT_LEFT, panel_width - 32, 19, Color.WHITE)
     draw_string(font, rect.position + Vector2(16, 145), "Выбери, что делать дальше:", HORIZONTAL_ALIGNMENT_LEFT, panel_width - 32, 15, Color("#d1c5b7"))
