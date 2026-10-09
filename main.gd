@@ -257,7 +257,7 @@ func _process(delta: float) -> void:
     # then each completed team action costs 3 seconds. A 20-second timeout
     # forces an action, so a leading team cannot wait out the final seconds.
     # Neither clock runs during intermissions, celebrations, customization or pause.
-    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and pending_skin < 0 and not setup_active:
+    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and pending_skin < 0 and not setup_active and not _capture_motion_active():
         if not final_phase_active:
             half_remaining = maxf(FINAL_PHASE_SECONDS, half_remaining - delta)
             if half_remaining <= FINAL_PHASE_SECONDS:
@@ -289,7 +289,7 @@ func _process(delta: float) -> void:
             _start_kickoff_whistle()
             _schedule_bot()
         queue_redraw()
-    if celebrating:
+    if celebrating and not _capture_motion_active():
         celebration_time = maxf(0.0, celebration_time - delta)
         if celebration_time <= 0.0:
             celebrating = false
@@ -302,7 +302,7 @@ func _process(delta: float) -> void:
                 message = "%s  %d : %d" % [completed_reason, scores[0], scores[1]]
                 _schedule_bot()
         queue_redraw()
-    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and not setup_active and not bot_pending and (game_mode == 1 or turn == 1):
+    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and not setup_active and not bot_pending and not _capture_motion_active() and (game_mode == 1 or turn == 1):
         decision_remaining = maxf(0.0, decision_remaining - delta)
         referee_warning = decision_remaining <= 5.0
         if decision_remaining <= 0.0:
@@ -318,6 +318,8 @@ func _process(delta: float) -> void:
         queue_redraw()
     if fx_impact_time > 0.0:
         fx_impact_time = maxf(0.0, fx_impact_time - delta)
+        if fx_impact_time <= 0.0:
+            fx_victim_index = -1
         queue_redraw()
     if fx_bounce_time > 0.0:
         fx_bounce_time = maxf(0.0, fx_bounce_time - delta)
@@ -792,7 +794,7 @@ func _drag_event(event: InputEvent) -> bool:
                     var carried_piece: int = selected
                     _tap(target)
                     # Drop/impact only; do not animate a second trip from the source.
-                    if carried_piece >= 0 and fx_piece == carried_piece and fx_to == target and fx_progress < 1.0:
+                    if carried_piece >= 0 and fx_piece == carried_piece and fx_to == target and fx_progress < 1.0 and fx_victim_index < 0:
                         if pieces[carried_piece]["alive"] and pieces[carried_piece]["cell"] == target:
                             fx_from = target
                             fx_duration = 0.20
@@ -908,6 +910,19 @@ var fx_progress: float = 1.0
 var fx_duration: float = 0.60
 var fx_impact: Vector2i = Vector2i(-1, -1)
 var fx_impact_time: float = 0.0
+# A captured monster should still be visible while the attacker jumps over it.
+var fx_victim_index: int = -1
+var fx_victim_cell: Vector2i = Vector2i(-1, -1)
+var capture_sequence_running: bool = false
+
+func _capture_motion_active() -> bool:
+    return capture_sequence_running or (fx_victim_index >= 0 and fx_progress < 0.99)
+
+func _wait_for_current_jump() -> void:
+    # Also waits for a PAUSED game; no new step replaces the previous frame.
+    while is_inside_tree() and (paused_match or fx_progress < 0.99):
+        await get_tree().process_frame
+
 var fx_bounce_from: Vector2 = Vector2.ZERO
 var fx_bounce_start: Vector2 = Vector2.ZERO
 var fx_bounce_piece: int = -1
@@ -924,10 +939,16 @@ func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void
     fx_progress = 0.0
     fx_duration = 0.60
 
-func _start_hit_fx(cell: Vector2i) -> void:
+func _start_hit_fx(victim_index: int) -> void:
+    # The rules may remove the victim immediately, but its last image remains
+    # until the jumping monster reaches the captured square.
+    if victim_index < 0 or victim_index >= pieces.size():
+        return
     _play_sfx("capture")
-    fx_impact = cell
-    fx_impact_time = 0.55
+    fx_victim_index = victim_index
+    fx_victim_cell = pieces[victim_index]["cell"]
+    fx_impact = fx_victim_cell
+    fx_impact_time = 0.68
 
 func _draw_game_fx() -> void:
     var g: Dictionary = _geometry()
@@ -943,7 +964,19 @@ func _draw_game_fx() -> void:
             _draw_ghost_pumpkin(center, side * 0.17)
     if fx_impact_time > 0.0 and _inside(fx_impact):
         var center: Vector2 = _drag_cell_center(fx_impact)
-        var t: float = 1.0 - fx_impact_time / 0.55
+        var t: float = 1.0 - fx_impact_time / 0.68
+        if fx_victim_index >= 0 and fx_victim_index < pieces.size():
+            # Victim remains solid until the attack reaches its square, then
+            # dissolves in a glow rather than popping off the board instantly.
+            var alpha: float = 1.0 - smoothstep(0.38, 0.79, t)
+            if alpha > 0.01:
+                var victim_team: int = int(pieces[fx_victim_index]["team"])
+                var victim_key: String = BLUE_SKINS[piece_skins[fx_victim_index]] if victim_team == 1 else RED_SKINS[piece_skins[fx_victim_index]]
+                var victim_size: float = side * 0.93 * (1.0 - 0.23 * t)
+                if fantasy_textures.has(victim_key):
+                    draw_texture_rect(fantasy_textures[victim_key], Rect2(center - Vector2.ONE * victim_size * 0.5, Vector2.ONE * victim_size), false, Color(1, 1, 1, alpha))
+                else:
+                    draw_circle(center, victim_size * 0.38, Color(0.18, 0.7, 0.92, alpha) if victim_team == 1 else Color(0.91, 0.27, 0.29, alpha))
         draw_arc(center, side * (0.14 + t * 0.45), 0.0, TAU, 42, Color(1.0, 0.45, 0.13, 1.0-t), 3.0)
         for j in 8:
             var a: float = TAU * float(j) / 8.0 + t * 0.5
@@ -1233,6 +1266,9 @@ func _reset_board(kickoff_team: int = 1) -> void:
     referee_warning = false
     pieces.clear()
     fx_progress = 1.0
+    capture_sequence_running = false
+    fx_victim_index = -1
+    fx_impact_time = 0.0
     fx_impact_time = 0.0
     pass_fx_progress = 1.0
     # Restore each side's chosen compact setup after every goal and at halftime.
@@ -1395,6 +1431,7 @@ func _auto_human_action() -> void:
             action = candidate
             break
     selected = int(action["piece"])
+    capture_sequence_running = not action.has("pass_to") and int(action.get("victim", -1)) >= 0
     if action.has("pass_to"):
         _pass_ball(int(action["pass_to"]))
         return
@@ -1402,11 +1439,16 @@ func _auto_human_action() -> void:
         var victim: int = int(action["victim"])
         pieces[victim]["alive"] = false
         _credit_capture(turn)
-        _start_hit_fx(pieces[victim]["cell"])
+        _start_hit_fx(victim)
         if ball_holder == victim:
             ball_holder = selected
     _move_selected(action["to"])
+    if capture_sequence_running:
+        await _wait_for_current_jump()
+    if not is_inside_tree():
+        return
     if _check_elimination() or _check_goal():
+        capture_sequence_running = false
         return
     if int(action["victim"]) >= 0:
         for n in FOOTBALL_TEAM_SIZE:
@@ -1417,11 +1459,17 @@ func _auto_human_action() -> void:
             var victim_index: int = int(nxt["victim"])
             pieces[victim_index]["alive"] = false
             _credit_capture(turn)
+            _start_hit_fx(victim_index)
             if ball_holder == victim_index:
                 ball_holder = selected
             _move_selected(nxt["cell"])
-            if _check_elimination() or _check_goal():
+            await _wait_for_current_jump()
+            if not is_inside_tree():
                 return
+            if _check_elimination() or _check_goal():
+                capture_sequence_running = false
+                return
+    capture_sequence_running = false
     _finish_turn()
 
 func _draw_referee(at: Vector2, sc: float) -> void:
@@ -1633,7 +1681,7 @@ func _gui_input(event: InputEvent) -> void:
             _setup_input(event.position)
         accept_event()
         return
-    if paused_match or coin_remaining > 0.0 or halftime_remaining > 0.0 or opening_second_half > 0.0:
+    if paused_match or coin_remaining > 0.0 or halftime_remaining > 0.0 or opening_second_half > 0.0 or _capture_motion_active():
         accept_event()
         return
     if _drag_event(event):
@@ -1712,7 +1760,7 @@ func _tap(cell: Vector2i) -> void:
         if capture["cell"] == cell:
             pieces[capture["victim"]]["alive"] = false
             _credit_capture(turn)
-            _start_hit_fx(pieces[capture["victim"]]["cell"])
+            _start_hit_fx(int(capture["victim"]))
             if ball_holder == capture["victim"]:
                 ball_holder = selected
             _move_selected(cell)
@@ -2024,19 +2072,26 @@ func _bot_turn() -> void:
         # Experienced sees one reply; Legend sees the reply and counterplay.
         best = _fb_choose_action(candidates, 2 if bot_difficulty == 1 else 3)
     selected = int(best["piece"])
+    capture_sequence_running = not best.has("pass_to") and int(best.get("victim", -1)) >= 0
     if best.has("pass_to"):
         _pass_ball(int(best["pass_to"]))
         return
     if best["victim"] >= 0:
         pieces[best["victim"]]["alive"] = false
         _credit_capture(turn)
-        _start_hit_fx(pieces[best["victim"]]["cell"])
+        _start_hit_fx(int(best["victim"]))
         if ball_holder == best["victim"]:
             ball_holder = selected
     _move_selected(best["to"])
+    if capture_sequence_running:
+        await _wait_for_current_jump()
+    if not is_inside_tree():
+        return
     if _check_elimination():
+        capture_sequence_running = false
         return
     if _check_goal():
+        capture_sequence_running = false
         return
     # Keep capturing with the same piece while captures are available.
     if best["victim"] >= 0:
@@ -2052,14 +2107,20 @@ func _bot_turn() -> void:
                 next_capture = {"cell":chain_choice["to"], "victim":chain_choice["victim"]}
             pieces[next_capture["victim"]]["alive"] = false
             _credit_capture(turn)
-            _start_hit_fx(pieces[next_capture["victim"]]["cell"])
+            _start_hit_fx(int(next_capture["victim"]))
             if ball_holder == next_capture["victim"]:
                 ball_holder = selected
             _move_selected(next_capture["cell"])
+            await _wait_for_current_jump()
+            if not is_inside_tree():
+                return
             if _check_elimination():
+                capture_sequence_running = false
                 return
             if _check_goal():
+                capture_sequence_running = false
                 return
+    capture_sequence_running = false
     _finish_turn()
 
 # Central match time and large 20-second decision clock on the side now moving.
@@ -2190,7 +2251,7 @@ func _draw() -> void:
         if fx_piece == i and fx_progress < 1.0 and not drag_active:
             var eased: float = fx_progress * fx_progress * (3.0 - 2.0 * fx_progress)
             token_center = _drag_cell_center(fx_from).lerp(_drag_cell_center(fx_to), eased)
-            token_center.y -= sin(fx_progress * PI) * side * 0.035
+            token_center.y -= sin(fx_progress * PI) * side * (0.28 if fx_victim_index >= 0 else 0.035)
         if drag_active and drag_moved and cell == drag_origin:
             continue
         if not _draw_asset(key, Rect2(token_center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
@@ -2212,7 +2273,7 @@ func _draw() -> void:
     _draw_drag_hints()
     _draw_game_fx()
     _draw_drag_piece_overlay(side)
-    if celebrating:
+    if celebrating and not _capture_motion_active():
         _draw_halloween_party(1.0 - celebration_time / maxf(0.01, celebration_duration), celebration_team, celebration_final)
     _draw_bottom_actions()
     if paused_match:

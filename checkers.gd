@@ -678,7 +678,7 @@ func _drag_event(event: InputEvent) -> bool:
                     _tap(target)
                     # The piece was physically carried to its destination.
                     # Never replay the travel from the old square after release.
-                    if fx_progress < 1.0 and fx_target == target:
+                    if fx_progress < 1.0 and fx_target == target and fx_capture_data.is_empty():
                         fx_source = target
                         fx_duration = 0.14 if bool(fx_piece_data.get("king", false)) else 0.24
                         fx_progress = 0.0
@@ -776,6 +776,7 @@ var fx_progress: float = 1.0
 var fx_duration: float = 0.72
 var fx_capture: Vector2i = Vector2i(-1, -1)
 var fx_capture_time: float = 0.0
+var fx_capture_data: Dictionary = {}
 var fx_piece_data: Dictionary = {}
 var fx_bounce_time: float = 0.0
 var fx_bounce_cell: Vector2i = Vector2i(-1, -1)
@@ -834,19 +835,33 @@ func _start_move_fx(source: Vector2i, target: Vector2i, captured: Vector2i, data
     fx_source = source
     fx_target = target
     fx_progress = 0.0
-    fx_duration = 0.19 if bool(data["king"]) else 0.72
+    fx_duration = (0.46 if bool(data["king"]) else 0.80) if captured.x >= 0 else (0.19 if bool(data["king"]) else 0.72)
     fx_piece_data = data.duplicate()
+    fx_capture_data.clear()
     if captured.x >= 0:
+        fx_capture_data = _piece(captured).duplicate()
         fx_capture = captured
-        fx_capture_time = 0.55
+        fx_capture_time = fx_duration
 
 func _draw_game_fx() -> void:
     var g: Dictionary = _geometry()
     var side: float = g["side"]
     var origin: Vector2 = g["origin"]
     if fx_capture_time > 0.0:
-        var t: float = 1.0 - fx_capture_time / 0.55
+        var t: float = fx_progress
         var c: Vector2 = origin + Vector2(fx_capture.y + 0.5, fx_capture.x + 0.5) * side
+        if not fx_capture_data.is_empty() and int(fx_capture_data.get("team", 0)) != 0:
+            # Render the opponent's last pose until the jumping piece reaches it.
+            var opacity: float = 1.0 - smoothstep(0.38, 0.80, t)
+            if opacity > 0.01:
+                var victim_team: int = int(fx_capture_data["team"]) - 1
+                var victim_skin: int = king_skin[victim_team] if bool(fx_capture_data["king"]) else pawn_skin[victim_team]
+                var victim_key: String = BLUE_SKINS[victim_skin] if victim_team == 0 else RED_SKINS[victim_skin]
+                var diameter: float = side * 0.88 * (1.0 - t * 0.22)
+                if textures.has(victim_key):
+                    draw_texture_rect(textures[victim_key], Rect2(c - Vector2.ONE * diameter * 0.5, Vector2.ONE * diameter), false, Color(1, 1, 1, opacity))
+                else:
+                    draw_circle(c, diameter * 0.4, Color(0.2, 0.72, 0.92, opacity) if victim_team == 0 else Color(0.86, 0.27, 0.32, opacity))
         draw_arc(c, side * (0.17 + 0.43 * t), 0.0, TAU, 40, Color(1.0, 0.4, 0.12, 1.0-t), 3.0)
         for i in 8:
             var a: float = TAU * float(i) / 8.0
