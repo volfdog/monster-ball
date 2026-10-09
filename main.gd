@@ -25,7 +25,7 @@ var bot_pending := false
 var winner := 0
 
 # Football 3.1: two REAL-TIME halves and a separate anti-stalling decision clock.
-const HALF_SECONDS: int = 150
+const HALF_SECONDS: int = 180
 # The final 30 seconds are action-based: waiting cannot run out the match clock.
 const FINAL_PHASE_SECONDS: float = 30.0
 const FINAL_PHASE_ACTION_COST: float = 3.0
@@ -57,6 +57,7 @@ var pass_side: int = 0
 var ball_wiggle: float = 0.0
 var referee_warning: bool = false
 var halftime_player: AudioStreamPlayer
+var halftime_jingle_delay: float = 0.0
 
 # The goal is celebrated BEFORE resetting the pitch or showing the winner panel.
 var celebrating: bool = false
@@ -103,7 +104,7 @@ var game_audio_unlocked: bool = false
 var background_audio_poll: float = 0.0
 
 func _setup_game_audio() -> void:
-    for sound_name in ["stone_move", "king_move", "capture", "pass", "goal", "crowd", "victory", "arena_ambience"]:
+    for sound_name in ["stone_move", "king_move", "capture", "pass", "goal", "crowd", "victory", "arena_ambience", "time_warning", "whistle_halftime", "whistle_fulltime"]:
         var audio_path: String = "res://audio/%s.wav" % sound_name
         if ResourceLoader.exists(audio_path):
             sound_library[sound_name] = load(audio_path)
@@ -212,7 +213,7 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
-    # First 2:00: real-time clock. The final 0:30 FREEZES while thinking,
+    # First 2:30: real-time clock. The final 0:30 FREEZES while thinking,
     # then each completed team action costs 3 seconds. A 20-second timeout
     # forces an action, so a leading team cannot wait out the final seconds.
     # Neither clock runs during intermissions, celebrations, customization or pause.
@@ -231,6 +232,12 @@ func _process(delta: float) -> void:
             _schedule_bot()
         queue_redraw()
     elif halftime_remaining > 0.0:
+        if halftime_jingle_delay > 0.0:
+            halftime_jingle_delay = maxf(0.0, halftime_jingle_delay - delta)
+            if halftime_jingle_delay <= 0.0 and halftime_player != null and halftime_player.stream != null:
+                var muted: bool = bool(get_tree().root.get_meta("mb_muted", false))
+                if not muted and float(get_tree().root.get_meta("mb_vol_music", 0.55)) > 0.005:
+                    halftime_player.play()
         halftime_remaining = maxf(0.0, halftime_remaining - delta)
         if halftime_remaining <= 0.0:
             _begin_second_half()
@@ -332,6 +339,9 @@ func _confirmation_tap(point: Vector2) -> void:
     if point.y >= by and point.y <= by + 45.0 and point.x > size.x * 0.5:
         piece_skins[(customization_team - 1) * FOOTBALL_TEAM_SIZE + customization_slot] = pending_skin
         get_tree().root.set_meta("mb_football_skins", piece_skins.duplicate())
+        var mb_save: Dictionary = _mb_read_profile()
+        mb_save["football_skins"] = piece_skins.duplicate()
+        _mb_write_profile(mb_save)
     pending_skin = -1
     queue_redraw()
 
@@ -1029,6 +1039,8 @@ func _spawn_free_ball_center() -> void:
 
 # === Monster Ball 3.1 match director ===
 func _new_match() -> void:
+    halftime_jingle_delay = 0.0
+    mb_profile_counted = false
     scores = [0, 0]
     winner = 0
     game_over = false
@@ -1053,7 +1065,8 @@ func _begin_final_phase() -> void:
     final_phase_active = true
     final_actions_remaining = FINAL_PHASE_ACTIONS
     half_remaining = FINAL_PHASE_SECONDS
-    message = "РЕШАЮЩАЯ ФАЗА — 10 ХОДОВ ДО СВИСТКА!"
+    message = "30 СЕКУНД! РЕШАЮЩАЯ ФАЗА — 10 ХОДОВ!"
+    _play_sfx("time_warning")
     queue_redraw()
 
 func _complete_action_clock() -> bool:
@@ -1097,8 +1110,8 @@ func _resolve_half_boundary() -> void:
     bot_pending = false
     if half_number == 1:
         halftime_remaining = HALF_BREAK_SECONDS
-        if halftime_player != null and halftime_player.stream != null and not bool(get_tree().root.get_meta("mb_muted", false)):
-            halftime_player.play()
+        halftime_jingle_delay = 1.20
+        _play_sfx("whistle_halftime")
         selected = -1
         bot_pending = false
         message = "ПЕРЕРЫВ!  %d : %d" % [scores[0], scores[1]]
@@ -1107,6 +1120,7 @@ func _resolve_half_boundary() -> void:
     queue_redraw()
 
 func _begin_second_half() -> void:
+    halftime_jingle_delay = 0.0
     half_number = 2
     half_remaining = float(HALF_SECONDS)
     final_phase_active = false
@@ -1117,10 +1131,12 @@ func _begin_second_half() -> void:
     queue_redraw()
 
 func _finish_match() -> void:
+    _play_sfx("whistle_fulltime")
     game_over = true
     bot_pending = false
     selected = -1
     winner = 1 if scores[0] > scores[1] else (2 if scores[1] > scores[0] else 0)
+    _mb_record_finished("football", winner)
     message = "КОНЕЦ МАТЧА — НИЧЬЯ!" if winner == 0 else "ФИНАЛЬНЫЙ СВИСТОК!"
     if winner != 0:
         celebrating = true
@@ -2073,3 +2089,46 @@ func _draw_bottom_actions() -> void:
     draw_rect(Rect2(w + 4, y, w - 8, 61), Color("#ffc17a"), false, 2.0)
     draw_string(font, Vector2(13, y + 37), "НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_LEFT, w - 17, 15, Color.WHITE)
     draw_string(font, Vector2(w + 12, y + 37), "ГЛАВНОЕ МЕНЮ", HORIZONTAL_ALIGNMENT_LEFT, w - 18, 14, Color.WHITE)
+
+# Local save data is separate for each browser/PWA installation.
+# There is no online account or server sync in this version.
+const MB_PROFILE_FILE: String = "user://monster_ball_profile_v1.json"
+var mb_profile_counted: bool = false
+
+func _mb_read_profile() -> Dictionary:
+    var profile: Dictionary = {"version": 1, "played": 0, "wins": 0, "losses": 0, "draws": 0, "friend_games": 0, "football_games": 0, "checkers_games": 0}
+    if FileAccess.file_exists(MB_PROFILE_FILE):
+        var file: FileAccess = FileAccess.open(MB_PROFILE_FILE, FileAccess.READ)
+        if file != null:
+            var parsed: Variant = JSON.parse_string(file.get_as_text())
+            if parsed is Dictionary and int(parsed.get("version", 0)) == 1:
+                profile.merge(parsed, true)
+    return profile
+
+func _mb_write_profile(profile: Dictionary) -> void:
+    var file: FileAccess = FileAccess.open(MB_PROFILE_FILE, FileAccess.WRITE)
+    if file == null:
+        push_warning("Monster Ball: cannot write local profile save")
+        return
+    file.store_string(JSON.stringify(profile, "  "))
+    file.flush()
+
+func _mb_record_finished(kind: String, victor: int) -> void:
+    # Record once per finished game; abandoned/restarted games do not count.
+    if mb_profile_counted:
+        return
+    mb_profile_counted = true
+    var data: Dictionary = _mb_read_profile()
+    data["played"] = int(data.get("played", 0)) + 1
+    var stat: String = "football_games" if kind == "football" else "checkers_games"
+    data[stat] = int(data.get(stat, 0)) + 1
+    if game_mode == 1:
+        # Local friend mode: ONE game, never a win or loss for the profile.
+        data["friend_games"] = int(data.get("friend_games", 0)) + 1
+    elif victor == 1:
+        data["wins"] = int(data.get("wins", 0)) + 1
+    elif victor == 2:
+        data["losses"] = int(data.get("losses", 0)) + 1
+    else:
+        data["draws"] = int(data.get("draws", 0)) + 1
+    _mb_write_profile(data)
