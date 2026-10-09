@@ -20,6 +20,17 @@ var scores := [0, 0]
 var message := "Ход голубых"
 var game_mode := 0 # 0 = bot, 1 = two players
 var bot_difficulty: int = 1
+
+# PRE-MATCH TACTICAL SETUP. Only 3 ranks nearest each team's own goal are
+# available. Every new token MUST diagonally touch an existing friendly token.
+# The finished formations are reused at every kickoff during the same match.
+var setup_active: bool = false
+var setup_team: int = 1
+var setup_blue: Array[Vector2i] = []
+var setup_red: Array[Vector2i] = []
+var setup_tip: String = ""
+const SETUP_TIME_LIMIT: float = 30.0
+var setup_time_remaining: float = SETUP_TIME_LIMIT
 var game_over := false
 var bot_pending := false
 var winner := 0
@@ -56,6 +67,7 @@ var last_pass_sender: int = -1
 var pass_side: int = 0
 var ball_wiggle: float = 0.0
 var referee_warning: bool = false
+var kickoff_whistle_pending: bool = false
 var halftime_player: AudioStreamPlayer
 var halftime_jingle_delay: float = 0.0
 
@@ -108,6 +120,14 @@ func _setup_game_audio() -> void:
         var audio_path: String = "res://audio/%s.wav" % sound_name
         if ResourceLoader.exists(audio_path):
             sound_library[sound_name] = load(audio_path)
+    # Optional professionally-recorded guitar and sinister laughter (MP3/OGG/WAV).
+    # Missing files must never prevent Godot from starting the game.
+    for effect_name in ["king_laugh", "king_guitar", "match_guitar_final"]:
+        for extension in ["mp3", "ogg", "wav"]:
+            var effect_path: String = "res://audio/%s.%s" % [effect_name, extension]
+            if ResourceLoader.exists(effect_path):
+                sound_library[effect_name] = load(effect_path)
+                break
     # Prefer real, long field recordings if available. Keep existing effects intact.
     for track_name in ["stadium_crowd", "arena_ambience", "goal_crowd"]:
         for extension in ["ogg", "mp3"]:
@@ -191,6 +211,16 @@ func _unlock_game_audio() -> void:
         return
     game_audio_unlocked = true
     _resume_background_audio()
+    if kickoff_whistle_pending:
+        kickoff_whistle_pending = false
+        _play_sfx("whistle_halftime")
+
+func _start_kickoff_whistle() -> void:
+    # A whistle for the start of each half; delay until touch if iOS audio is locked.
+    if game_audio_unlocked:
+        _play_sfx("whistle_halftime")
+    else:
+        kickoff_whistle_pending = true
 
 func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     if not sound_library.has(sound_name) or bool(get_tree().root.get_meta("mb_muted", false)):
@@ -213,11 +243,21 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
+    # A complete pause freezes all match, celebration, transition and animation timers.
+    if paused_match:
+        return
+    # Each human team gets its own 30-second pre-match placement window.
+    # Match time and the 20-second decision timer remain frozen during setup.
+    if setup_active and not customization_open:
+        setup_time_remaining = maxf(0.0, setup_time_remaining - delta)
+        if setup_time_remaining <= 0.0:
+            _setup_auto_complete()
+        queue_redraw()
     # First 2:30: real-time clock. The final 0:30 FREEZES while thinking,
     # then each completed team action costs 3 seconds. A 20-second timeout
     # forces an action, so a leading team cannot wait out the final seconds.
     # Neither clock runs during intermissions, celebrations, customization or pause.
-    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and pending_skin < 0:
+    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and pending_skin < 0 and not setup_active:
         if not final_phase_active:
             half_remaining = maxf(FINAL_PHASE_SECONDS, half_remaining - delta)
             if half_remaining <= FINAL_PHASE_SECONDS:
@@ -229,6 +269,7 @@ func _process(delta: float) -> void:
     if coin_remaining > 0.0:
         coin_remaining = maxf(0.0, coin_remaining - delta)
         if coin_remaining <= 0.0:
+            _start_kickoff_whistle()
             _schedule_bot()
         queue_redraw()
     elif halftime_remaining > 0.0:
@@ -245,6 +286,7 @@ func _process(delta: float) -> void:
     elif opening_second_half > 0.0:
         opening_second_half = maxf(0.0, opening_second_half - delta)
         if opening_second_half <= 0.0:
+            _start_kickoff_whistle()
             _schedule_bot()
         queue_redraw()
     if celebrating:
@@ -260,7 +302,7 @@ func _process(delta: float) -> void:
                 message = "%s  %d : %d" % [completed_reason, scores[0], scores[1]]
                 _schedule_bot()
         queue_redraw()
-    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and not bot_pending and (game_mode == 1 or turn == 1):
+    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and not setup_active and not bot_pending and (game_mode == 1 or turn == 1):
         decision_remaining = maxf(0.0, decision_remaining - delta)
         referee_warning = decision_remaining <= 5.0
         if decision_remaining <= 0.0:
@@ -813,7 +855,7 @@ func _drag_is_own_piece(cell: Vector2i) -> bool:
     return i >= 0 and int(pieces[i]["team"]) == turn
 
 func _drag_can_start(point: Vector2) -> bool:
-    return not paused_match and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not celebrating and not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
+    return not setup_active and not paused_match and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not celebrating and not customization_open and pending_skin < 0 and not game_over and not bot_pending and (game_mode != 0 or turn == 1)
 
 func _draw_drag_piece_overlay(side: float) -> void:
     if not drag_active or not drag_moved or selected < 0 or selected >= pieces.size():
@@ -973,8 +1015,6 @@ func _ready() -> void:
     half_remaining = float(HALF_SECONDS)
     final_phase_active = false
     final_actions_remaining = FINAL_PHASE_ACTIONS
-    _reset_board(first_kickoff_team)
-    coin_remaining = COIN_SECONDS
     game_mode = int(get_tree().root.get_meta("mb_mode", 0))
     bot_difficulty = clampi(int(get_tree().root.get_meta("mb_bot_difficulty", 1)), 0, 2)
     customization_open = bool(get_tree().root.get_meta("mb_customize", false))
@@ -989,6 +1029,195 @@ func _ready() -> void:
         else:
             for j in mini(saved.size(), piece_skins.size()):
                 piece_skins[j] = clampi(int(saved[j]), 0, 3)
+    _start_setup()
+
+func _setup_cells(team_id: int) -> Array[Vector2i]:
+    return setup_blue if team_id == 1 else setup_red
+
+func _setup_allowed(cell: Vector2i, team_id: int) -> bool:
+    if not _inside(cell) or (cell.x + cell.y) % 2 != 0 or _piece_at(cell) >= 0:
+        return false
+    # At most 3 rows from our own back line; no jump toward midfield.
+    if team_id == 1 and (cell.x < ROWS - 3 or cell.x >= ROWS):
+        return false
+    if team_id == 2 and (cell.x < 0 or cell.x > 2):
+        return false
+    var formation: Array[Vector2i] = _setup_cells(team_id)
+    # The very first piece must anchor the formation on its back rank.
+    if formation.is_empty():
+        return cell.x == (ROWS - 1 if team_id == 1 else 0)
+    # Every next piece touches another friendly piece on a playable diagonal.
+    for existing in formation:
+        if absi(cell.x - existing.x) == 1 and absi(cell.y - existing.y) == 1:
+            return true
+    return false
+
+func _setup_add(cell: Vector2i) -> void:
+    var formation: Array[Vector2i] = _setup_cells(setup_team)
+    if formation.size() >= FOOTBALL_TEAM_SIZE or not _setup_allowed(cell, setup_team):
+        setup_tip = "КЛЕТКА НЕДОСТУПНА: ставь вплотную по диагонали"
+        queue_redraw()
+        return
+    formation.append(cell)
+    pieces.append({"team": setup_team, "cell": cell, "alive": true})
+    setup_tip = "ФИШКИ: %d/%d" % [formation.size(), FOOTBALL_TEAM_SIZE]
+    _play_sfx("menu_click")
+    queue_redraw()
+
+func _setup_undo() -> void:
+    var formation: Array[Vector2i] = _setup_cells(setup_team)
+    if formation.is_empty():
+        setup_tip = "ЕЩЁ НЕТ ПОСТАВЛЕННЫХ ФИШЕК"
+        queue_redraw()
+        return
+    formation.pop_back()
+    # Pieces are appended in the order the user places them.
+    pieces.pop_back()
+    setup_tip = "ПОСЛЕДНЯЯ ФИШКА УБРАНА"
+    queue_redraw()
+
+func _setup_bot() -> void:
+    # Bot builds a valid tight cluster rather than using the old fixed 4+1.
+    for candidate_round in 12:
+        setup_red.clear()
+        var candidate: Array[Vector2i] = []
+        for column in range(0, COLS, 2):
+            candidate.append(Vector2i(0, column))
+        candidate.shuffle()
+        if candidate.is_empty():
+            break
+        setup_red.append(candidate[0])
+        while setup_red.size() < FOOTBALL_TEAM_SIZE:
+            var allowed: Array[Vector2i] = []
+            for row in 3:
+                for col in COLS:
+                    var cell := Vector2i(row, col)
+                    if setup_red.has(cell) or (row + col) % 2 != 0:
+                        continue
+                    for other in setup_red:
+                        if absi(cell.x - other.x) == 1 and absi(cell.y - other.y) == 1:
+                            allowed.append(cell)
+                            break
+            if allowed.is_empty():
+                break
+            setup_red.append(allowed.pick_random())
+        if setup_red.size() == FOOTBALL_TEAM_SIZE:
+            break
+    if setup_red.size() != FOOTBALL_TEAM_SIZE:
+        # Safety net: connected staggered formation, all on playable squares.
+        setup_red.clear()
+        setup_red.append_array([Vector2i(0, 2), Vector2i(1, 3), Vector2i(0, 4), Vector2i(1, 5), Vector2i(2, 4)])
+    for cell in setup_red:
+        pieces.append({"team": 2, "cell": cell, "alive": true})
+
+func _setup_auto_complete() -> void:
+    # Time ran out: keep all already-placed pieces and legally add the missing ones.
+    # Every placement is on an active square of the team's three home ranks,
+    # diagonally adjacent to at least one existing friendly piece.
+    while _setup_cells(setup_team).size() < FOOTBALL_TEAM_SIZE:
+        var available: Array[Vector2i] = []
+        var first_row: int = ROWS - 3 if setup_team == 1 else 0
+        for row in range(first_row, first_row + 3):
+            for col in COLS:
+                var cell := Vector2i(row, col)
+                if _setup_allowed(cell, setup_team):
+                    available.append(cell)
+        if available.is_empty():
+            # Defensive stop rather than creating an illegal piece.
+            setup_tip = "НЕТ ДОПУСТИМЫХ КЛЕТОК — ИСПРАВЬ РАССТАНОВКУ"
+            queue_redraw()
+            return
+        var chosen: Vector2i = available.pick_random()
+        _setup_cells(setup_team).append(chosen)
+        pieces.append({"team": setup_team, "cell": chosen, "alive": true})
+    setup_tip = "ВРЕМЯ ВЫШЛО: РАССТАНОВКА ЗАВЕРШЕНА"
+    _setup_confirm()
+
+func _setup_confirm() -> void:
+    var formation: Array[Vector2i] = _setup_cells(setup_team)
+    if formation.size() < FOOTBALL_TEAM_SIZE:
+        setup_tip = "НУЖНО ПОСТАВИТЬ ВСЕ ПЯТЬ ФИШЕК"
+        queue_redraw()
+        return
+    if setup_team == 1:
+        setup_team = 2
+        setup_time_remaining = SETUP_TIME_LIMIT  # Fresh 30 seconds for red friend.
+        setup_tip = "КРАСНЫЕ: расставьте свою пятёрку"
+        if game_mode == 0:
+            _setup_bot()
+            _setup_finalize()
+        else:
+            queue_redraw()
+    else:
+        _setup_finalize()
+
+func _setup_finalize() -> void:
+    # The coin toss follows both formations; the ball stays unclaimed.
+    setup_active = false
+    first_kickoff_team = randi_range(1, 2)
+    _reset_board(first_kickoff_team)
+    coin_remaining = COIN_SECONDS
+    message = "ЖЕРЕБЬЁВКА — КТО ПЕРВЫМ ИДЁТ К МЯЧУ?"
+    queue_redraw()
+
+func _start_setup() -> void:
+    # New match = new formation; goal and halftime = restore the same formation.
+    setup_active = true
+    setup_team = 1
+    setup_time_remaining = SETUP_TIME_LIMIT
+    setup_blue.clear()
+    setup_red.clear()
+    pieces.clear()
+    ball_holder = -1
+    ball_cell = Vector2i(4, 4)
+    selected = -1
+    paused_match = false
+    coin_remaining = 0.0
+    opening_second_half = 0.0
+    halftime_remaining = 0.0
+    celebrating = false
+    drag_active = false
+    bot_pending = false
+    decision_remaining = DECISION_SECONDS
+    setup_tip = "СИНИЕ: начни с заднего ряда"
+    message = "РАССТАНОВКА ПЕРЕД МАТЧЕМ"
+    queue_redraw()
+
+func _setup_input(point: Vector2) -> void:
+    if point.y > size.y - 82.0:
+        if point.x < size.x * 0.5:
+            _setup_undo()
+        else:
+            _setup_confirm()
+        return
+    var cell: Vector2i = _drag_point_to_cell(point)
+    if _inside(cell):
+        _setup_add(cell)
+
+func _draw_setup_help(offset: Vector2, side: float, font: Font) -> void:
+    # Highlight the three home ranks and the next admissible diagonal squares.
+    var row_start: int = ROWS - 3 if setup_team == 1 else 0
+    var stripe_color: Color = Color("#338cd1", 0.15) if setup_team == 1 else Color("#d4526c", 0.15)
+    for row in range(row_start, row_start + 3):
+        draw_rect(Rect2(offset + Vector2(0, row * side), Vector2(COLS * side, side)), stripe_color)
+    for row in range(row_start, row_start + 3):
+        for col in COLS:
+            var cell: Vector2i = Vector2i(row, col)
+            if _setup_allowed(cell, setup_team):
+                var center: Vector2 = offset + Vector2(col + 0.5, row + 0.5) * side
+                draw_circle(center, maxf(3.0, side * 0.11), Color("#b8ffb1", 0.92))
+                draw_arc(center, side * 0.29, 0.0, TAU, 32, Color("#89f8bd", 0.6), 1.7)
+    # Large countdown is visible for the active side only. Each friend gets 30s.
+    var panel := Rect2(9.0, 35.0, size.x - 18.0, 137.0)
+    draw_rect(panel, Color("#111426", 0.96))
+    draw_rect(panel, Color("#55d5ff") if setup_team == 1 else Color("#ff7b8e"), false, 2.0)
+    var heading: String = "СИНИЕ — РАССТАНОВКА" if setup_team == 1 else "КРАСНЫЕ — РАССТАНОВКА"
+    draw_string(font, Vector2(panel.position.x + 8.0, 57.0), heading, HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 20, Color("#ffde9d"))
+    var countdown_color: Color = Color("#ff6c69") if setup_time_remaining <= 5.0 else Color("#f8f6df")
+    draw_string(font, Vector2(panel.position.x + 8.0, 100.0), "00:%02d" % maxi(0, ceili(setup_time_remaining)), HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 36, countdown_color)
+    draw_string(font, Vector2(panel.position.x + 8.0, 121.0), "ПОСТАВЛЕНО: %d/5" % _setup_cells(setup_team).size(), HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 16, Color.WHITE)
+    draw_string(font, Vector2(panel.position.x + 8.0, 140.0), "3 своих ряда · фишки вплотную по диагонали", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 12, Color("#cce3eb"))
+    draw_string(font, Vector2(panel.position.x + 8.0, 161.0), setup_tip, HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 12, Color("#f7d293"))
 
 func _reset_board(kickoff_team: int = 1) -> void:
     celebrating = false
@@ -1006,11 +1235,10 @@ func _reset_board(kickoff_team: int = 1) -> void:
     fx_progress = 1.0
     fx_impact_time = 0.0
     pass_fx_progress = 1.0
-    # Football: five players per side; second-line players mirror each other.
-    # All starting cells are distinct playable diagonal-board cells.
-    for cell in [Vector2i(9, 1), Vector2i(9, 3), Vector2i(9, 5), Vector2i(9, 7), Vector2i(8, 4)]:
+    # Restore each side's chosen compact setup after every goal and at halftime.
+    for cell in setup_blue:
         pieces.append({"team": 1, "cell": cell, "alive": true})
-    for cell in [Vector2i(0, 0), Vector2i(0, 2), Vector2i(0, 4), Vector2i(0, 6), Vector2i(1, 3)]:
+    for cell in setup_red:
         pieces.append({"team": 2, "cell": cell, "alive": true})
     # The coin awards the FIRST MOVE, never immediate possession.
     # Choose one of the 8 playable central squares (even row+column parity).
@@ -1053,10 +1281,7 @@ func _new_match() -> void:
     half_remaining = float(HALF_SECONDS)
     final_phase_active = false
     final_actions_remaining = FINAL_PHASE_ACTIONS
-    first_kickoff_team = randi_range(1, 2)
-    _reset_board(first_kickoff_team)
-    coin_remaining = COIN_SECONDS
-    queue_redraw()
+    _start_setup()
 
 func _begin_final_phase() -> void:
     # One transition per half. IMPORTANT: arriving at 00:30 never ends a half.
@@ -1132,6 +1357,9 @@ func _begin_second_half() -> void:
 
 func _finish_match() -> void:
     _play_sfx("whistle_fulltime")
+    # Longer recorded electric-guitar ending; keep existing victory cue as fallback.
+    if sound_library.has("match_guitar_final"):
+        _play_sfx("match_guitar_final")
     game_over = true
     bot_pending = false
     selected = -1
@@ -1144,7 +1372,8 @@ func _finish_match() -> void:
         celebration_duration = 3.6
         celebration_final = true
         celebration_team = winner
-        _play_sfx("victory")
+        if not sound_library.has("match_guitar_final"):
+            _play_sfx("victory")
         _play_sfx("crowd", "crowd")
     queue_redraw()
 
@@ -1387,11 +1616,23 @@ func _gui_input(event: InputEvent) -> void:
             var ball_pos: Vector2 = _drag_cell_center(ball_cell)
             if touch_point.distance_to(ball_pos) <= float(_geometry()["cell_size"]) * 0.45:
                 ball_wiggle = 0.65
-        if touch_point.y < 115.0 and touch_point.x > size.x - 107.0 and coin_remaining <= 0.0 and halftime_remaining <= 0.0:
+        if touch_point.y < 115.0 and touch_point.x > size.x - 107.0 and not customization_open and not setup_active and not game_over:
             paused_match = not paused_match
+            drag_active = false
+            drag_moved = false
+            drag_input_touch = false
+            if crowd_ambience != null:
+                crowd_ambience.stream_paused = paused_match
+            if halftime_player != null:
+                halftime_player.stream_paused = paused_match
             queue_redraw()
             accept_event()
             return
+    if setup_active and not customization_open:
+        if (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
+            _setup_input(event.position)
+        accept_event()
+        return
     if paused_match or coin_remaining > 0.0 or halftime_remaining > 0.0 or opening_second_half > 0.0:
         accept_event()
         return
@@ -1550,7 +1791,7 @@ func _finish_turn() -> void:
         _schedule_bot()
 
 func _schedule_bot() -> void:
-    if bot_pending or game_over or celebrating or paused_match or coin_remaining > 0.0 or halftime_remaining > 0.0 or opening_second_half > 0.0 or turn != 2:
+    if bot_pending or game_over or celebrating or paused_match or setup_active or coin_remaining > 0.0 or halftime_remaining > 0.0 or opening_second_half > 0.0 or turn != 2:
         return
     bot_pending = true
     _bot_turn.call_deferred()
@@ -1869,7 +2110,8 @@ func _draw() -> void:
     var offset: Vector2 = geometry["offset"]
     _halloween_arena(offset, Vector2(COLS * side, ROWS * side))
     var font: Font = ThemeDB.fallback_font
-    _draw_match_clocks(offset, side, font)
+    if not setup_active:
+        _draw_match_clocks(offset, side, font)
     _draw_referee(Vector2(size.x - 24.0, 168.0), 0.76)
     # Fantasy stone board. Geometry and input coordinates stay unchanged.
     var board_size := Vector2(COLS * side, ROWS * side)
@@ -1932,6 +2174,8 @@ func _draw() -> void:
             draw_line(a, b, glow, thickness)
             draw_line(b, c, glow, thickness)
             draw_line(c, d, glow, thickness)
+    if setup_active and not customization_open:
+        _draw_setup_help(offset, side, font)
     for i in pieces.size():
         if not pieces[i]["alive"]:
             continue
@@ -1971,14 +2215,14 @@ func _draw() -> void:
     if celebrating:
         _draw_halloween_party(1.0 - celebration_time / maxf(0.01, celebration_duration), celebration_team, celebration_final)
     _draw_bottom_actions()
-    if coin_remaining > 0.0:
+    if paused_match:
+        _draw_pause_screen()
+    elif coin_remaining > 0.0:
         _draw_coin_toss()
     elif halftime_remaining > 0.0:
         _draw_halftime_show()
     elif opening_second_half > 0.0:
         _draw_second_half_start()
-    elif paused_match:
-        _draw_pause_screen()
     if game_over and not celebrating:
         var panel := Rect2(Vector2(18, size.y * 0.34), Vector2(size.x - 36, 204))
         draw_rect(panel, Color("#15111eef"))
@@ -2087,8 +2331,11 @@ func _draw_bottom_actions() -> void:
     draw_rect(Rect2(w + 4, y, w - 8, 61), Color("#684026"))
     draw_rect(Rect2(4, y, w - 8, 61), Color("#83d5e4"), false, 2.0)
     draw_rect(Rect2(w + 4, y, w - 8, 61), Color("#ffc17a"), false, 2.0)
-    draw_string(font, Vector2(13, y + 37), "НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_LEFT, w - 17, 15, Color.WHITE)
-    draw_string(font, Vector2(w + 12, y + 37), "ГЛАВНОЕ МЕНЮ", HORIZONTAL_ALIGNMENT_LEFT, w - 18, 14, Color.WHITE)
+    var left_label: String = "УБРАТЬ ПОСЛЕДНЮЮ" if setup_active else "НОВАЯ ИГРА"
+    var ready: bool = _setup_cells(setup_team).size() == FOOTBALL_TEAM_SIZE
+    var right_label: String = ("ГОТОВО ✓" if ready else "ПОСТАВЬ ВСЕ 5") if setup_active else "ГЛАВНОЕ МЕНЮ"
+    draw_string(font, Vector2(13, y + 37), left_label, HORIZONTAL_ALIGNMENT_LEFT, w - 17, 14, Color.WHITE)
+    draw_string(font, Vector2(w + 12, y + 37), right_label, HORIZONTAL_ALIGNMENT_LEFT, w - 18, 14, Color.WHITE)
 
 # Local save data is separate for each browser/PWA installation.
 # There is no online account or server sync in this version.

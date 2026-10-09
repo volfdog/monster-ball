@@ -28,6 +28,10 @@ var turn_had_promotion: bool = false
 var turn_only_kings: bool = true
 var win_celebration_time: float = 0.0
 var win_celebration_seen: bool = false
+var paused_checkers: bool = false
+var promotion_fx_cell: Vector2i = Vector2i(-1, -1)
+var promotion_fx_time: float = 0.0
+const PROMOTION_FX_SECONDS: float = 1.65
 const WIN_CELEBRATION_DURATION := 3.3
 var textures: Dictionary = {}
 const BLUE_SKINS := ["blue_knight", "blue_wizard", "blue_rogue", "blue_dwarf"]
@@ -59,6 +63,14 @@ func _setup_game_audio() -> void:
         var audio_path: String = "res://audio/%s.wav" % sound_name
         if ResourceLoader.exists(audio_path):
             sound_library[sound_name] = load(audio_path)
+    # Optional professionally-recorded guitar and sinister laughter (MP3/OGG/WAV).
+    # Missing files must never prevent Godot from starting the game.
+    for effect_name in ["king_laugh", "king_guitar", "match_guitar_final"]:
+        for extension in ["mp3", "ogg", "wav"]:
+            var effect_path: String = "res://audio/%s.%s" % [effect_name, extension]
+            if ResourceLoader.exists(effect_path):
+                sound_library[effect_name] = load(effect_path)
+                break
     # Prefer real, long field recordings if available. Keep existing effects intact.
     for track_name in ["stadium_crowd", "arena_ambience", "goal_crowd"]:
         for extension in ["ogg", "mp3"]:
@@ -149,6 +161,11 @@ func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     player.play()
 
 func _process(delta: float) -> void:
+    if paused_checkers:
+        return
+    if promotion_fx_time > 0.0:
+        promotion_fx_time = maxf(0.0, promotion_fx_time - delta)
+        queue_redraw()
     if opening_coin > 0.0:
         opening_coin = maxf(0.0, opening_coin - delta)
         if opening_coin <= 0.0:
@@ -161,11 +178,16 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
-    if finished and winning_team != 0 and not win_celebration_seen:
+    if finished and not win_celebration_seen:
         win_celebration_seen = true
-        win_celebration_time = WIN_CELEBRATION_DURATION
-        _play_sfx("victory")
-        _play_sfx("crowd", "crowd")
+        if winning_team != 0:
+            win_celebration_time = WIN_CELEBRATION_DURATION
+        if sound_library.has("match_guitar_final"):
+            _play_sfx("match_guitar_final")
+        elif winning_team != 0:
+            _play_sfx("victory")
+        if winning_team != 0:
+            _play_sfx("crowd", "crowd")
     if win_celebration_time > 0.0:
         win_celebration_time = maxf(0.0, win_celebration_time - delta)
         queue_redraw()
@@ -237,9 +259,17 @@ func _confirmation_tap(point: Vector2) -> void:
         if customization_kind == 0:
             pawn_skin[customization_team - 1] = pending_skin
             get_tree().root.set_meta("mb_checkers_pawn", pawn_skin.duplicate())
+            var mb_save: Dictionary = _mb_read_profile()
+            mb_save["checkers_pawn"] = get_tree().root.get_meta("mb_checkers_pawn", pawn_skin.duplicate())
+            mb_save["checkers_king"] = get_tree().root.get_meta("mb_checkers_king", king_skin.duplicate())
+            _mb_write_profile(mb_save)
         else:
             king_skin[customization_team - 1] = pending_skin
             get_tree().root.set_meta("mb_checkers_king", king_skin.duplicate())
+            var mb_save: Dictionary = _mb_read_profile()
+            mb_save["checkers_pawn"] = get_tree().root.get_meta("mb_checkers_pawn", pawn_skin.duplicate())
+            mb_save["checkers_king"] = get_tree().root.get_meta("mb_checkers_king", king_skin.duplicate())
+            _mb_write_profile(mb_save)
     pending_skin = -1
     queue_redraw()
 
@@ -703,7 +733,7 @@ func _drag_is_own_piece(cell: Vector2i) -> bool:
     return not finished and not bot_pending and (game_mode != 0 or turn == 1) and int(_piece(cell)["team"]) == turn and (forced.x < 0 or cell == forced)
 
 func _drag_can_start(point: Vector2) -> bool:
-    return opening_coin <= 0.0 and not customization_open and pending_skin < 0 and not finished and not bot_pending and fx_progress >= 0.99 and (game_mode != 0 or turn == 1)
+    return not paused_checkers and opening_coin <= 0.0 and not customization_open and pending_skin < 0 and not finished and not bot_pending and fx_progress >= 0.99 and (game_mode != 0 or turn == 1)
 
 func _draw_drag_piece_overlay(side: float) -> void:
     if not drag_active or not drag_moved or not _inside(drag_origin):
@@ -751,6 +781,51 @@ var fx_bounce_time: float = 0.0
 var fx_bounce_cell: Vector2i = Vector2i(-1, -1)
 var fx_bounce_start: Vector2 = Vector2.ZERO
 var fx_bounce_data: Dictionary = {}
+
+func _start_promotion_fx(cell: Vector2i) -> void:
+    promotion_fx_cell = cell
+    promotion_fx_time = PROMOTION_FX_SECONDS
+    _play_sfx("king_laugh")
+    _play_sfx("king_guitar")
+    queue_redraw()
+
+func _draw_promotion_fx() -> void:
+    if promotion_fx_time <= 0.0 or promotion_fx_cell.x < 0:
+        return
+    var geo: Dictionary = _geometry()
+    var cell_side: float = geo["side"]
+    var top_left: Vector2 = geo["origin"]
+    var center: Vector2 = top_left + Vector2(promotion_fx_cell.y + 0.5, promotion_fx_cell.x + 0.5) * cell_side
+    var progress: float = 1.0 - promotion_fx_time / PROMOTION_FX_SECONDS
+    var light: float = 1.0 - progress
+    draw_circle(center, cell_side * (0.32 + progress * 0.64), Color(1.0, 0.69, 0.17, 0.24 * light))
+    draw_arc(center, cell_side * (0.19 + progress * 0.87), 0.0, TAU, 48, Color(0.95, 0.74, 0.24, 0.90 * light), 4.0)
+    draw_arc(center, cell_side * (0.16 + progress * 0.53), 0.0, TAU, 40, Color(0.43, 0.88, 1.0, 0.72 * light), 2.5)
+    for i in 16:
+        var angle: float = TAU * float(i) / 16.0 + progress * 1.2
+        var direction: Vector2 = Vector2(cos(angle), sin(angle))
+        var distance: float = cell_side * (0.18 + progress * (0.65 + float(i % 4) * 0.11))
+        var particle: Vector2 = center + direction * distance
+        var color: Color = Color(1.0, 0.89, 0.36, light) if i % 3 != 0 else Color(0.44, 0.9, 1.0, light)
+        draw_line(particle - direction * cell_side * 0.11, particle + direction * cell_side * 0.11, color, maxf(1.5, cell_side * 0.033))
+        draw_circle(particle, maxf(1.5, cell_side * 0.037), color)
+    draw_string(ThemeDB.fallback_font, center + Vector2(-cell_side * 0.75, -cell_side * 0.64), "ДАМКА!", HORIZONTAL_ALIGNMENT_CENTER, cell_side * 1.5, maxi(14, int(cell_side * 0.25)), Color(1.0, 0.94, 0.68, light))
+
+func _toggle_checkers_pause() -> void:
+    paused_checkers = not paused_checkers
+    drag_active = false
+    drag_moved = false
+    drag_input_touch = false
+    if crowd_ambience != null:
+        crowd_ambience.stream_paused = paused_checkers
+    queue_redraw()
+
+func _draw_checkers_pause() -> void:
+    draw_rect(Rect2(Vector2.ZERO, size), Color("#090b16", 0.78))
+    draw_string(ThemeDB.fallback_font, Vector2(12.0, size.y * 0.46), "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 34, Color("#f6cf85"))
+    draw_string(ThemeDB.fallback_font, Vector2(12.0, size.y * 0.54), "Нажми ПРОДОЛЖИТЬ сверху", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 16, Color.WHITE)
+    draw_rect(Rect2(size.x - 107.0, 79.0, 99.0, 30.0), Color("#53405b"))
+    draw_string(ThemeDB.fallback_font, Vector2(size.x - 104.0, 99.0), "ПРОДОЛЖИТЬ", HORIZONTAL_ALIGNMENT_CENTER, 93.0, 12, Color.WHITE)
 
 func _start_move_fx(source: Vector2i, target: Vector2i, captured: Vector2i, data: Dictionary) -> void:
     _play_sfx("king_move" if bool(data["king"]) else "stone_move")
@@ -831,10 +906,16 @@ func _ready() -> void:
     _new_game()
 
 func _new_game() -> void:
+    mb_profile_counted = false
     # Preserve alternation across games and scene changes in this app session.
     opening_team = int(get_tree().root.get_meta("mb_checkers_next_first", randi_range(1, 2)))
     get_tree().root.set_meta("mb_checkers_next_first", 3 - opening_team)
     opening_coin = OPENING_COIN_SECONDS
+    paused_checkers = false
+    if crowd_ambience != null:
+        crowd_ambience.stream_paused = false
+    promotion_fx_cell = Vector2i(-1, -1)
+    promotion_fx_time = 0.0
     win_celebration_time = 0.0
     win_celebration_seen = false
     fx_progress = 1.0
@@ -965,6 +1046,8 @@ func _complete_turn() -> void:
             message = "НИЧЬЯ!"
         else:
             message = "Ход синих" if turn == 1 else "Ход красных"
+    if finished:
+        _mb_record_finished("checkers", winning_team)
     _reset_turn_draw_flags()
 
 func _inside(p: Vector2i) -> bool:
@@ -1037,7 +1120,7 @@ func _has_move(side: int) -> bool:
     return false
 
 func _tap(p: Vector2i) -> void:
-    if fx_progress < 0.99: return
+    if fx_progress < 0.99 or paused_checkers: return
     if finished or bot_pending or (game_mode == 0 and turn == 2): return
     if forced.x >= 0 and p == forced:
         selected = p
@@ -1068,6 +1151,7 @@ func _tap(p: Vector2i) -> void:
         if not data["king"] and (p.x == 0 and turn == 1 or p.x == 7 and turn == 2):
             data["king"] = true
             became_king = true
+            _start_promotion_fx(p)
         _remember_piece_action(taken, became_king, was_king)
         selected = p
         if taken.x >= 0 and not became_king and not _captures(p).is_empty():
@@ -1088,6 +1172,14 @@ func _tap(p: Vector2i) -> void:
 func _gui_input(event: InputEvent) -> void:
     if (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
         _unlock_game_audio()
+    if (event is InputEventScreenTouch and event.pressed) or (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
+        if event.position.x > size.x - 115.0 and event.position.y >= 74.0 and event.position.y < 119.0 and not finished and not customization_open:
+            _toggle_checkers_pause()
+            accept_event()
+            return
+    if paused_checkers:
+        accept_event()
+        return
     if opening_coin > 0.0:
         accept_event()
         return
@@ -1151,6 +1243,8 @@ func _draw() -> void:
     var font: Font = ThemeDB.fallback_font
     draw_string(font, Vector2(18, 35), "MONSTER BALL / HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 19, Color("#ffbb74"))
     draw_string(font, Vector2(18, 72), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 17, Color("#d9f6f9"))
+    draw_rect(Rect2(size.x - 107.0, 79.0, 99.0, 30.0), Color("#413451"))
+    draw_string(font, Vector2(size.x - 104.0, 99.0), "ПРОДОЛЖИТЬ" if paused_checkers else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 93.0, 12, Color.WHITE)
     draw_rect(Rect2(o-Vector2(5,5),Vector2(s*8+10,s*8+10)),Color("#efad62"),false,3.0)
     for r in N:
         for c in N:
@@ -1194,6 +1288,7 @@ func _draw() -> void:
         draw_string(font,o+Vector2(8*s+7,(r+0.58)*s),label,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#b9e5e8"))
     _draw_drag_hints()
     _draw_game_fx()
+    _draw_promotion_fx()
     _draw_drag_piece_overlay(s)
     if win_celebration_time > 0.0:
         _draw_halloween_party(1.0 - win_celebration_time / WIN_CELEBRATION_DURATION, winning_team, true)
@@ -1205,6 +1300,8 @@ func _draw() -> void:
         _confirmation_ui()
     elif finished and win_celebration_time <= 0.0:
         _draw_victory_panel()
+    if paused_checkers:
+        _draw_checkers_pause()
 
 func _customization_tap(pos: Vector2) -> void:
     if pos.y < 120.0 or pos.y > size.y - 65.0:
@@ -1403,6 +1500,8 @@ func _bot_move() -> void:
     if not is_inside_tree():
         return
     await get_tree().create_timer(0.88).timeout
+    while is_inside_tree() and paused_checkers:
+        await get_tree().process_frame
     if not is_inside_tree():
         return
     bot_pending = false
@@ -1413,6 +1512,7 @@ func _bot_move() -> void:
         finished = true
         winning_team = 1
         message = "ПОБЕДИЛИ СИНИЕ!"
+        _mb_record_finished("checkers", winning_team)
         queue_redraw()
         return
     var best: Dictionary
@@ -1434,6 +1534,7 @@ func _bot_move() -> void:
     var promoted: bool = not piece_data["king"] and dest.x == 7
     if promoted:
         piece_data["king"] = true
+        _start_promotion_fx(dest)
     _remember_piece_action(captured, promoted, was_king)
     if captured.x >= 0 and not promoted and not _captures(dest).is_empty():
         forced = dest
@@ -1449,6 +1550,8 @@ func _bot_continue() -> void:
     if not is_inside_tree():
         return
     await get_tree().create_timer(0.80).timeout
+    while is_inside_tree() and paused_checkers:
+        await get_tree().process_frame
     if not is_inside_tree() or game_mode != 0 or finished or turn != 2:
         return
     var moves: Array = _captures(forced)
@@ -1477,6 +1580,7 @@ func _bot_continue() -> void:
     var promoted: bool = not data["king"] and dest.x == 7
     if promoted:
         data["king"] = true
+        _start_promotion_fx(dest)
     _remember_piece_action(victim, promoted, was_king)
     forced = dest
     selected = dest
@@ -1535,3 +1639,46 @@ func _victory_tap(pos: Vector2) -> void:
             _go_to_main_menu()
         else:
             _new_game()
+
+# Local save data is separate for each browser/PWA installation.
+# There is no online account or server sync in this version.
+const MB_PROFILE_FILE: String = "user://monster_ball_profile_v1.json"
+var mb_profile_counted: bool = false
+
+func _mb_read_profile() -> Dictionary:
+    var profile: Dictionary = {"version": 1, "played": 0, "wins": 0, "losses": 0, "draws": 0, "friend_games": 0, "football_games": 0, "checkers_games": 0}
+    if FileAccess.file_exists(MB_PROFILE_FILE):
+        var file: FileAccess = FileAccess.open(MB_PROFILE_FILE, FileAccess.READ)
+        if file != null:
+            var parsed: Variant = JSON.parse_string(file.get_as_text())
+            if parsed is Dictionary and int(parsed.get("version", 0)) == 1:
+                profile.merge(parsed, true)
+    return profile
+
+func _mb_write_profile(profile: Dictionary) -> void:
+    var file: FileAccess = FileAccess.open(MB_PROFILE_FILE, FileAccess.WRITE)
+    if file == null:
+        push_warning("Monster Ball: cannot write local profile save")
+        return
+    file.store_string(JSON.stringify(profile, "  "))
+    file.flush()
+
+func _mb_record_finished(kind: String, victor: int) -> void:
+    # Record once per finished game; abandoned/restarted games do not count.
+    if mb_profile_counted:
+        return
+    mb_profile_counted = true
+    var data: Dictionary = _mb_read_profile()
+    data["played"] = int(data.get("played", 0)) + 1
+    var stat: String = "football_games" if kind == "football" else "checkers_games"
+    data[stat] = int(data.get(stat, 0)) + 1
+    if game_mode == 1:
+        # Local friend mode: ONE game, never a win or loss for the profile.
+        data["friend_games"] = int(data.get("friend_games", 0)) + 1
+    elif victor == 1:
+        data["wins"] = int(data.get("wins", 0)) + 1
+    elif victor == 2:
+        data["losses"] = int(data.get("losses", 0)) + 1
+    else:
+        data["draws"] = int(data.get("draws", 0)) + 1
+    _mb_write_profile(data)
