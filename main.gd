@@ -25,12 +25,18 @@ var bot_pending := false
 var winner := 0
 
 # Football 3.1: two REAL-TIME halves and a separate anti-stalling decision clock.
-const HALF_SECONDS: int = 120
+const HALF_SECONDS: int = 180
 const DECISION_SECONDS: float = 20.0
 const HALF_BREAK_SECONDS: float = 7.0
 const COIN_SECONDS: float = 2.8
 var half_number: int = 1
 var half_remaining: float = float(HALF_SECONDS)
+# Monster Score: actual goals are worth 5; each eliminated rival is worth 1.
+# Every capture is counted as it happens, including the final fifth player.
+var match_goals := [0, 0]
+var match_captures := [0, 0]
+var match_blocks := [0, 0]
+var boundary_resolved_half: int = 0
 var first_kickoff_team: int = 1
 var active_kickoff_team: int = 1
 var decision_remaining: float = DECISION_SECONDS
@@ -896,14 +902,24 @@ func _living(team_id: int) -> int:
             n += 1
     return n
 
-func _award_point(team_id: int, reason: String, spend_clock: bool = true) -> void:
+func _credit_capture(team_id: int) -> void:
+    # Called ONLY on real moves, never from the AI's speculative search.
     if celebrating or game_over:
         return
     scores[team_id - 1] += 1
+    match_captures[team_id - 1] += 1
+
+func _end_round(team_id: int, reason: String, goal_scored: bool = false, spend_clock: bool = true) -> void:
+    if celebrating or game_over:
+        return
+    # A goal scores +5, but eliminating all five earns precisely the five
+    # capture points already awarded. There is NO bonus on round completion.
+    if goal_scored:
+        scores[team_id - 1] += 5
+        match_goals[team_id - 1] += 1
     celebrating = true
     celebration_team = team_id
     celebration_reason = reason
-    # No 3-goal cap: the winner is decided at the end of the second half.
     celebration_final = false
     celebration_duration = 3.2
     celebration_time = celebration_duration
@@ -912,16 +928,16 @@ func _award_point(team_id: int, reason: String, spend_clock: bool = true) -> voi
     message = "%s  %d : %d" % [reason, scores[0], scores[1]]
     if spend_clock:
         _complete_action_clock()
-    _play_sfx("goal")
+    _play_sfx("goal" if goal_scored else "capture")
     _play_sfx("crowd", "crowd")
     queue_redraw()
 
 func _check_elimination() -> bool:
     if _living(1) == 0:
-        _award_point(2, "ВСЕ СИНИЕ ФИШКИ СЪЕДЕНЫ!")
+        _end_round(2, "ВСЕ СИНИЕ ФИШКИ УНИЧТОЖЕНЫ!")
         return true
     if _living(2) == 0:
-        _award_point(1, "ВСЕ КРАСНЫЕ ФИШКИ СЪЕДЕНЫ!")
+        _end_round(1, "ВСЕ КРАСНЫЕ ФИШКИ УНИЧТОЖЕНЫ!")
         return true
     return false
 
@@ -1004,6 +1020,10 @@ func _new_match() -> void:
     winner = 0
     game_over = false
     phase_after_goal = false
+    boundary_resolved_half = 0
+    match_goals = [0, 0]
+    match_captures = [0, 0]
+    match_blocks = [0, 0]
     half_number = 1
     half_remaining = float(HALF_SECONDS)
     first_kickoff_team = randi_range(1, 2)
@@ -1018,6 +1038,17 @@ func _complete_action_clock() -> void:
     referee_warning = false
 
 func _resolve_half_boundary() -> void:
+    # This is idempotent: neither halftime nor the final whistle grants points.
+    if boundary_resolved_half == half_number:
+        return
+    boundary_resolved_half = half_number
+
+    # Avoid carrying a drag or a scheduled bot move across the whistle.
+    selected = -1
+    drag_active = false
+    drag_moved = false
+    drag_input_touch = false
+    bot_pending = false
     if half_number == 1:
         halftime_remaining = HALF_BREAK_SECONDS
         if halftime_player != null and halftime_player.stream != null and not bool(get_tree().root.get_meta("mb_muted", false)):
@@ -1062,7 +1093,7 @@ func _auto_human_action() -> void:
     drag_origin = Vector2i(-1, -1)
     var options: Array[Dictionary] = _fb_ai_choices(turn)
     if options.is_empty():
-        _award_point(3 - turn, "СУДЬЯ: НЕТ ДОПУСТИМЫХ ХОДОВ!")
+        _end_round(3 - turn, "СУДЬЯ: НЕТ ДОПУСТИМЫХ ХОДОВ!")
         return
     # Timeout never gives free ball possession; it selects a legal action.
     var action: Dictionary = options[0]
@@ -1077,6 +1108,7 @@ func _auto_human_action() -> void:
     if int(action["victim"]) >= 0:
         var victim: int = int(action["victim"])
         pieces[victim]["alive"] = false
+        _credit_capture(turn)
         _start_hit_fx(pieces[victim]["cell"])
         if ball_holder == victim:
             ball_holder = selected
@@ -1091,6 +1123,7 @@ func _auto_human_action() -> void:
             var nxt: Dictionary = chain[0]
             var victim_index: int = int(nxt["victim"])
             pieces[victim_index]["alive"] = false
+            _credit_capture(turn)
             if ball_holder == victim_index:
                 ball_holder = selected
             _move_selected(nxt["cell"])
@@ -1145,6 +1178,8 @@ func _draw_halftime_show() -> void:
     var font: Font = ThemeDB.fallback_font
     draw_string(font, Vector2(10, size.y * 0.22), "ПЕРЕРЫВ — ШОУ МОНСТРОВ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 25, Color("#ffe19b"))
     draw_string(font, Vector2(10, size.y * 0.31), "СЧЁТ  %d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 26, Color.WHITE)
+    draw_string(font, Vector2(10, size.y * 0.36), "ГОЛЫ  %d:%d   •   ВЗЯТИЯ  %d:%d" % [match_goals[0], match_goals[1], match_captures[0], match_captures[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 16, Color("#cde7eb"))
+    draw_string(font, Vector2(10, size.y * 0.41), "БЛОКИРОВКИ  %d:%d  •  БОНУСОВ НЕТ" % [match_blocks[0], match_blocks[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 15, Color("#ffe09b"))
     for i in 5:
         var xx: float = (float(i) + 0.65) * size.x / 5.5
         var yy: float = size.y * 0.54 + sin(magic_clock * (3.0 + i * 0.15) + i) * 19.0
@@ -1269,7 +1304,14 @@ func _check_last_carrier_stuck(team_id: int) -> bool:
         return false
     if _carrier_has_move(ball_holder):
         return false
-    _award_point(3 - team_id, "МЯЧ ЗАБЛОКИРОВАН — ГОЛ СОПЕРНИКА!", false)
+    # The blocked last carrier counts as ONE eliminated piece, not a goal.
+    # With four prior captures the total is exactly five points.
+    pieces[ball_holder]["alive"] = false
+    ball_holder = -1
+    var opponent: int = 3 - team_id
+    scores[opponent - 1] += 1
+    match_blocks[opponent - 1] += 1
+    _end_round(opponent, "ПОСЛЕДНИЙ ИГРОК ЗАБЛОКИРОВАН! +1", false, false)
     return true
 
 func _gui_input(event: InputEvent) -> void:
@@ -1364,6 +1406,7 @@ func _tap(cell: Vector2i) -> void:
     for capture in _captures(selected):
         if capture["cell"] == cell:
             pieces[capture["victim"]]["alive"] = false
+            _credit_capture(turn)
             _start_hit_fx(pieces[capture["victim"]]["cell"])
             if ball_holder == capture["victim"]:
                 ball_holder = selected
@@ -1421,7 +1464,7 @@ func _check_goal() -> bool:
     var cell: Vector2i = pieces[ball_holder]["cell"]
     var goal_row: int = 0 if scoring_team == 1 else ROWS - 1
     if cell.x == goal_row and cell.y >= 2 and cell.y <= 5:
-        _award_point(scoring_team, "ГОЛ!")
+        _end_round(scoring_team, "ГОЛ! +5", true)
         return true
     return false
 
@@ -1663,7 +1706,7 @@ func _bot_turn() -> void:
     var candidates: Array[Dictionary] = _fb_ai_choices(2)
     if candidates.is_empty():
         message = "У красных нет допустимых ходов"
-        _award_point(1, "БЛОКИРОВКА — ГОЛ СИНИХ!")
+        _end_round(1, "НЕТ ХОДОВ — НОВЫЙ РОЗЫГРЫШ!")
         return
     var best: Dictionary
     if bot_difficulty == 0:
@@ -1678,6 +1721,7 @@ func _bot_turn() -> void:
         return
     if best["victim"] >= 0:
         pieces[best["victim"]]["alive"] = false
+        _credit_capture(turn)
         _start_hit_fx(pieces[best["victim"]]["cell"])
         if ball_holder == best["victim"]:
             ball_holder = selected
@@ -1699,6 +1743,7 @@ func _bot_turn() -> void:
                 var chain_choice: Dictionary = _fb_choose_action(chain_candidates, 1 if bot_difficulty == 1 else 2)
                 next_capture = {"cell":chain_choice["to"], "victim":chain_choice["victim"]}
             pieces[next_capture["victim"]]["alive"] = false
+            _credit_capture(turn)
             _start_hit_fx(pieces[next_capture["victim"]]["cell"])
             if ball_holder == next_capture["victim"]:
                 ball_holder = selected
@@ -1864,14 +1909,17 @@ func _draw() -> void:
     elif paused_match:
         _draw_pause_screen()
     if game_over and not celebrating:
-        var panel := Rect2(Vector2(18, size.y * 0.38), Vector2(size.x - 36, 145))
+        var panel := Rect2(Vector2(18, size.y * 0.34), Vector2(size.x - 36, 204))
         draw_rect(panel, Color("#15111eef"))
         draw_rect(panel, Color("#f6cf65"), false, 3.0)
         var heading := ("НИЧЬЯ!" if winner == 0 else ("ПОЗДРАВЛЯЕМ С ПОБЕДОЙ!" if (game_mode == 1 or winner == 1) else "ВЫ ПРОИГРАЛИ!"))
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 52), heading, HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 24, Color.WHITE)
         var detail := "Равный счёт" if winner == 0 else ("Победили голубые" if winner == 1 else "Победили красные")
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 87), "%s · Счёт %d : %d" % [detail, scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color("#f6cf65"))
-        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 117), "Нажми НОВАЯ ИГРА, чтобы сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 14, Color.WHITE)
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 116), "ГОЛЫ (5)        %d : %d" % [match_goals[0], match_goals[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 15, Color("#ffd68e"))
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 140), "ВЗЯТИЯ (1)    %d : %d" % [match_captures[0], match_captures[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 15, Color("#c8e9f2"))
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 164), "БЛОКИРОВКИ (1) %d : %d" % [match_blocks[0], match_blocks[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 14, Color("#d4c4ff"))
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 191), "НОВАЯ ИГРА — сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 13, Color.WHITE)
 
 
     if customization_open:
