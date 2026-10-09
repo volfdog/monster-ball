@@ -29,6 +29,8 @@ var setup_team: int = 1
 var setup_blue: Array[Vector2i] = []
 var setup_red: Array[Vector2i] = []
 var setup_tip: String = ""
+var setup_template: int = -1
+const SETUP_NAMES := ["ОБОРОНА", "БАЛАНС", "АТАКА"]
 const SETUP_TIME_LIMIT: float = 30.0
 var setup_time_remaining: float = SETUP_TIME_LIMIT
 var game_over := false
@@ -36,7 +38,7 @@ var bot_pending := false
 var winner := 0
 
 # Football 3.1: two REAL-TIME halves and a separate anti-stalling decision clock.
-const HALF_SECONDS: int = 180
+const HALF_SECONDS: int = 150
 # The final 30 seconds are action-based: waiting cannot run out the match clock.
 const FINAL_PHASE_SECONDS: float = 30.0
 const FINAL_PHASE_ACTION_COST: float = 3.0
@@ -211,16 +213,12 @@ func _unlock_game_audio() -> void:
         return
     game_audio_unlocked = true
     _resume_background_audio()
-    if kickoff_whistle_pending:
-        kickoff_whistle_pending = false
-        _play_sfx("whistle_halftime")
+    kickoff_whistle_pending = false
 
 func _start_kickoff_whistle() -> void:
-    # A whistle for the start of each half; delay until touch if iOS audio is locked.
-    if game_audio_unlocked:
-        _play_sfx("whistle_halftime")
-    else:
-        kickoff_whistle_pending = true
+    # The former whistle recording was too harsh on phones.
+    # Keep the kickoff announcements, but do not play the piercing sound.
+    kickoff_whistle_pending = false
 
 func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     if not sound_library.has(sound_name) or bool(get_tree().root.get_meta("mb_muted", false)):
@@ -232,7 +230,8 @@ func _play_sfx(sound_name: String, channel: String = "effects") -> void:
     var player: AudioStreamPlayer = AudioStreamPlayer.new()
     add_child(player)
     player.stream = sound_library["goal_crowd"] if sound_name == "crowd" and sound_library.has("goal_crowd") else sound_library[sound_name]
-    player.volume_db = linear_to_db(maxf(0.001, v * (0.68 if channel == "crowd" else 0.85)))
+    var quiet_factor: float = 0.40 if sound_name == "time_warning" else (0.68 if channel == "crowd" else 0.85)
+    player.volume_db = linear_to_db(maxf(0.001, v * quiet_factor))
     player.finished.connect(func(): player.queue_free())
     player.play()
 
@@ -253,7 +252,7 @@ func _process(delta: float) -> void:
         if setup_time_remaining <= 0.0:
             _setup_auto_complete()
         queue_redraw()
-    # First 2:30: real-time clock. The final 0:30 FREEZES while thinking,
+    # First 2:00: real-time clock. The final 0:30 FREEZES while thinking,
     # then each completed team action costs 3 seconds. A 20-second timeout
     # forces an action, so a leading team cannot wait out the final seconds.
     # Neither clock runs during intermissions, celebrations, customization or pause.
@@ -1067,28 +1066,45 @@ func _ready() -> void:
 func _setup_cells(team_id: int) -> Array[Vector2i]:
     return setup_blue if team_id == 1 else setup_red
 
+func _setup_preset(team_id: int, preset_id: int) -> Array[Vector2i]:
+    # Template cells are legal diagonal squares on the THREE home ranks.
+    # Red is drafted at the top; Blue mirrors it across the board centre.
+    var red_cells: Array[Vector2i] = []
+    match preset_id:
+        0: # Defence: 3 deep + 2 advanced.
+            red_cells.append_array([Vector2i(0, 0), Vector2i(0, 2), Vector2i(0, 4), Vector2i(1, 1), Vector2i(1, 3)])
+        1: # Balance: 2 deep + 2 middle + 1 forward.
+            red_cells.append_array([Vector2i(0, 2), Vector2i(0, 4), Vector2i(1, 1), Vector2i(1, 3), Vector2i(2, 2)])
+        2: # Attack: 1 deep + 2 middle + 2 forward.
+            red_cells.append_array([Vector2i(0, 2), Vector2i(1, 1), Vector2i(1, 3), Vector2i(2, 0), Vector2i(2, 2)])
+    if team_id == 2:
+        return red_cells
+    var blue_cells: Array[Vector2i] = []
+    for cell in red_cells:
+        blue_cells.append(Vector2i(ROWS - 1 - cell.x, COLS - 1 - cell.y))
+    return blue_cells
+
+func _setup_select_preset(preset_id: int) -> void:
+    if preset_id < 0 or preset_id >= SETUP_NAMES.size():
+        return
+    # Choosing another shape removes only that team's preview pieces.
+    for i in range(pieces.size() - 1, -1, -1):
+        if int(pieces[i]["team"]) == setup_team:
+            pieces.remove_at(i)
+    _setup_cells(setup_team).clear()
+    setup_template = preset_id
+    setup_tip = "СХЕМА: %s • ПОСТАВЬ 5 ФИШЕК" % SETUP_NAMES[preset_id]
+    queue_redraw()
+
 func _setup_allowed(cell: Vector2i, team_id: int) -> bool:
-    if not _inside(cell) or (cell.x + cell.y) % 2 != 0 or _piece_at(cell) >= 0:
+    if setup_template < 0 or not _inside(cell) or _piece_at(cell) >= 0:
         return false
-    # At most 3 rows from our own back line; no jump toward midfield.
-    if team_id == 1 and (cell.x < ROWS - 3 or cell.x >= ROWS):
-        return false
-    if team_id == 2 and (cell.x < 0 or cell.x > 2):
-        return false
-    var formation: Array[Vector2i] = _setup_cells(team_id)
-    # The very first piece must anchor the formation on its back rank.
-    if formation.is_empty():
-        return cell.x == (ROWS - 1 if team_id == 1 else 0)
-    # Every next piece touches another friendly piece on a playable diagonal.
-    for existing in formation:
-        if absi(cell.x - existing.x) == 1 and absi(cell.y - existing.y) == 1:
-            return true
-    return false
+    return _setup_preset(team_id, setup_template).has(cell)
 
 func _setup_add(cell: Vector2i) -> void:
     var formation: Array[Vector2i] = _setup_cells(setup_team)
     if formation.size() >= FOOTBALL_TEAM_SIZE or not _setup_allowed(cell, setup_team):
-        setup_tip = "КЛЕТКА НЕДОСТУПНА: ставь вплотную по диагонали"
+        setup_tip = "ВЫБЕРИ ПОДСВЕЧЕННУЮ КЛЕТКУ СВОЕЙ СХЕМЫ"
         queue_redraw()
         return
     formation.append(cell)
@@ -1110,59 +1126,21 @@ func _setup_undo() -> void:
     queue_redraw()
 
 func _setup_bot() -> void:
-    # Bot builds a valid tight cluster rather than using the old fixed 4+1.
-    for candidate_round in 12:
-        setup_red.clear()
-        var candidate: Array[Vector2i] = []
-        for column in range(0, COLS, 2):
-            candidate.append(Vector2i(0, column))
-        candidate.shuffle()
-        if candidate.is_empty():
-            break
-        setup_red.append(candidate[0])
-        while setup_red.size() < FOOTBALL_TEAM_SIZE:
-            var allowed: Array[Vector2i] = []
-            for row in 3:
-                for col in COLS:
-                    var cell := Vector2i(row, col)
-                    if setup_red.has(cell) or (row + col) % 2 != 0:
-                        continue
-                    for other in setup_red:
-                        if absi(cell.x - other.x) == 1 and absi(cell.y - other.y) == 1:
-                            allowed.append(cell)
-                            break
-            if allowed.is_empty():
-                break
-            setup_red.append(allowed.pick_random())
-        if setup_red.size() == FOOTBALL_TEAM_SIZE:
-            break
-    if setup_red.size() != FOOTBALL_TEAM_SIZE:
-        # Safety net: connected staggered formation, all on playable squares.
-        setup_red.clear()
-        setup_red.append_array([Vector2i(0, 2), Vector2i(1, 3), Vector2i(0, 4), Vector2i(1, 5), Vector2i(2, 4)])
+    # Bot selects one of the same three legal schemes as the human player.
+    setup_red.clear()
+    setup_red.append_array(_setup_preset(2, randi_range(0, 2)))
     for cell in setup_red:
         pieces.append({"team": 2, "cell": cell, "alive": true})
 
 func _setup_auto_complete() -> void:
-    # Time ran out: keep all already-placed pieces and legally add the missing ones.
-    # Every placement is on an active square of the team's three home ranks,
-    # diagonally adjacent to at least one existing friendly piece.
-    while _setup_cells(setup_team).size() < FOOTBALL_TEAM_SIZE:
-        var available: Array[Vector2i] = []
-        var first_row: int = ROWS - 3 if setup_team == 1 else 0
-        for row in range(first_row, first_row + 3):
-            for col in COLS:
-                var cell := Vector2i(row, col)
-                if _setup_allowed(cell, setup_team):
-                    available.append(cell)
-        if available.is_empty():
-            # Defensive stop rather than creating an illegal piece.
-            setup_tip = "НЕТ ДОПУСТИМЫХ КЛЕТОК — ИСПРАВЬ РАССТАНОВКУ"
-            queue_redraw()
-            return
-        var chosen: Vector2i = available.pick_random()
-        _setup_cells(setup_team).append(chosen)
-        pieces.append({"team": setup_team, "cell": chosen, "alive": true})
+    # The timer fills ONLY the as-yet unused approved slots.
+    # If no template was picked, choose BALANCE by default.
+    if setup_template < 0:
+        _setup_select_preset(1)
+    for cell in _setup_preset(setup_team, setup_template):
+        if not _setup_cells(setup_team).has(cell):
+            _setup_cells(setup_team).append(cell)
+            pieces.append({"team": setup_team, "cell": cell, "alive": true})
     setup_tip = "ВРЕМЯ ВЫШЛО: РАССТАНОВКА ЗАВЕРШЕНА"
     _setup_confirm()
 
@@ -1174,8 +1152,9 @@ func _setup_confirm() -> void:
         return
     if setup_team == 1:
         setup_team = 2
+        setup_template = -1
         setup_time_remaining = SETUP_TIME_LIMIT  # Fresh 30 seconds for red friend.
-        setup_tip = "КРАСНЫЕ: расставьте свою пятёрку"
+        setup_tip = "КРАСНЫЕ: ВЫБЕРИТЕ СХЕМУ"
         if game_mode == 0:
             _setup_bot()
             _setup_finalize()
@@ -1197,6 +1176,7 @@ func _start_setup() -> void:
     # New match = new formation; goal and halftime = restore the same formation.
     setup_active = true
     setup_team = 1
+    setup_template = -1
     setup_time_remaining = SETUP_TIME_LIMIT
     setup_blue.clear()
     setup_red.clear()
@@ -1212,45 +1192,62 @@ func _start_setup() -> void:
     drag_active = false
     bot_pending = false
     decision_remaining = DECISION_SECONDS
-    setup_tip = "СИНИЕ: начни с заднего ряда"
+    setup_tip = "СИНИЕ: ВЫБЕРИТЕ ОДНУ ИЗ ТРЁХ СХЕМ"
     message = "РАССТАНОВКА ПЕРЕД МАТЧЕМ"
     queue_redraw()
 
 func _setup_input(point: Vector2) -> void:
+    # The three tactic cards occupy the space between the header and pitch.
+    if point.y >= 104.0 and point.y <= 177.0:
+        var choice: int = clampi(int(point.x * 3.0 / maxf(1.0, size.x)), 0, 2)
+        _setup_select_preset(choice)
+        return
     if point.y > size.y - 82.0:
         if point.x < size.x * 0.5:
             _setup_undo()
         else:
             _setup_confirm()
         return
+    if setup_template < 0:
+        setup_tip = "СНАЧАЛА ВЫБЕРИ: ОБОРОНА, БАЛАНС ИЛИ АТАКА"
+        queue_redraw()
+        return
     var cell: Vector2i = _drag_point_to_cell(point)
     if _inside(cell):
         _setup_add(cell)
 
 func _draw_setup_help(offset: Vector2, side: float, font: Font) -> void:
-    # Highlight the three home ranks and the next admissible diagonal squares.
-    var row_start: int = ROWS - 3 if setup_team == 1 else 0
-    var stripe_color: Color = Color("#338cd1", 0.15) if setup_team == 1 else Color("#d4526c", 0.15)
-    for row in range(row_start, row_start + 3):
-        draw_rect(Rect2(offset + Vector2(0, row * side), Vector2(COLS * side, side)), stripe_color)
-    for row in range(row_start, row_start + 3):
-        for col in COLS:
-            var cell: Vector2i = Vector2i(row, col)
-            if _setup_allowed(cell, setup_team):
-                var center: Vector2 = offset + Vector2(col + 0.5, row + 0.5) * side
-                draw_circle(center, maxf(3.0, side * 0.11), Color("#b8ffb1", 0.92))
-                draw_arc(center, side * 0.29, 0.0, TAU, 32, Color("#89f8bd", 0.6), 1.7)
-    # Large countdown is visible for the active side only. Each friend gets 30s.
-    var panel := Rect2(9.0, 35.0, size.x - 18.0, 137.0)
-    draw_rect(panel, Color("#111426", 0.96))
+    # Green circles are the FIVE fixed playable positions selected by the player.
+    if setup_template >= 0:
+        var preset: Array[Vector2i] = _setup_preset(setup_team, setup_template)
+        for idx in preset.size():
+            var cell: Vector2i = preset[idx]
+            var center: Vector2 = offset + Vector2(cell.y + 0.5, cell.x + 0.5) * side
+            var occupied: bool = _setup_cells(setup_team).has(cell)
+            draw_circle(center, side * 0.36, Color("#173a46", 0.63))
+            draw_arc(center, side * 0.35, 0.0, TAU, 40, Color("#ffc56a", 0.85) if occupied else Color("#8affbb", 0.95), 3.3)
+            if not occupied:
+                draw_string(font, center + Vector2(-side * 0.32, side * 0.12), str(idx + 1), HORIZONTAL_ALIGNMENT_CENTER, side * 0.64, 21, Color("#deffe2"))
+    var panel := Rect2(8.0, 30.0, size.x - 16.0, 67.0)
+    draw_rect(panel, Color("#151426", 0.98))
     draw_rect(panel, Color("#55d5ff") if setup_team == 1 else Color("#ff7b8e"), false, 2.0)
-    var heading: String = "СИНИЕ — РАССТАНОВКА" if setup_team == 1 else "КРАСНЫЕ — РАССТАНОВКА"
-    draw_string(font, Vector2(panel.position.x + 8.0, 57.0), heading, HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 20, Color("#ffde9d"))
-    var countdown_color: Color = Color("#ff6c69") if setup_time_remaining <= 5.0 else Color("#f8f6df")
-    draw_string(font, Vector2(panel.position.x + 8.0, 100.0), "00:%02d" % maxi(0, ceili(setup_time_remaining)), HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 36, countdown_color)
-    draw_string(font, Vector2(panel.position.x + 8.0, 121.0), "ПОСТАВЛЕНО: %d/5" % _setup_cells(setup_team).size(), HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 16, Color.WHITE)
-    draw_string(font, Vector2(panel.position.x + 8.0, 140.0), "3 своих ряда · фишки вплотную по диагонали", HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 12, Color("#cce3eb"))
-    draw_string(font, Vector2(panel.position.x + 8.0, 161.0), setup_tip, HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 16.0, 12, Color("#f7d293"))
+    var team_name: String = "СИНИЕ" if setup_team == 1 else "КРАСНЫЕ"
+    var heading: String = "%s — ВЫБОР СХЕМЫ" % team_name
+    draw_string(font, Vector2(15.0, 55.0), heading, HORIZONTAL_ALIGNMENT_LEFT, size.x - 128.0, 19, Color("#ffe1a9"))
+    var countdown_color: Color = Color("#ff6969") if setup_time_remaining <= 5.0 else Color("#fff9df")
+    draw_string(font, Vector2(size.x - 105.0, 57.0), "00:%02d" % maxi(0, ceili(setup_time_remaining)), HORIZONTAL_ALIGNMENT_RIGHT, 90.0, 25, countdown_color)
+    draw_string(font, Vector2(15.0, 79.0), ("ВЫБЕРИ ОДНУ ИЗ ТРЁХ СХЕМ" if setup_template < 0 else "ПОСТАВЬ 5 ФИШЕК НА ЗЕЛЁНЫЕ КЛЕТКИ"), HORIZONTAL_ALIGNMENT_CENTER, size.x - 30.0, 16, Color("#cbe6ee"))
+    # Wide buttons are suitable for tapping on a phone.
+    var names := ["ОБОРОНА", "БАЛАНС", "АТАКА"]
+    var ranks := ["3–2", "2–2–1", "1–2–2"]
+    for n in 3:
+        var card_w: float = size.x / 3.0
+        var r := Rect2(n * card_w + 3.0, 104.0, card_w - 6.0, 68.0)
+        draw_rect(r, Color("#1d4b43") if n == setup_template else Color("#302b3f"))
+        draw_rect(r, Color("#97ffc2") if n == setup_template else Color("#c1a273"), false, 2.5)
+        draw_string(font, Vector2(r.position.x + 3.0, 131.0), names[n], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 6.0, 17, Color.WHITE)
+        draw_string(font, Vector2(r.position.x + 3.0, 157.0), ranks[n], HORIZONTAL_ALIGNMENT_CENTER, r.size.x - 6.0, 21, Color("#ffdc91"))
+    draw_string(font, Vector2(12.0, offset.y - 12.0), "ПОСТАВЛЕНО: %d/5" % _setup_cells(setup_team).size(), HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 18, Color("#ffdfa5"))
 
 func _reset_board(kickoff_team: int = 1) -> void:
     celebrating = false
@@ -1372,7 +1369,7 @@ func _resolve_half_boundary() -> void:
     if half_number == 1:
         halftime_remaining = HALF_BREAK_SECONDS
         halftime_jingle_delay = 1.20
-        _play_sfx("whistle_halftime")
+        # Silent halftime transition; the visual show and music still play.
         selected = -1
         bot_pending = false
         message = "ПЕРЕРЫВ!  %d : %d" % [scores[0], scores[1]]
@@ -1392,7 +1389,7 @@ func _begin_second_half() -> void:
     queue_redraw()
 
 func _finish_match() -> void:
-    _play_sfx("whistle_fulltime")
+    # No piercing full-time whistle. Let the long guitar ending play.
     # Longer recorded electric-guitar ending; keep existing victory cue as fallback.
     if sound_library.has("match_guitar_final"):
         _play_sfx("match_guitar_final")
@@ -1505,7 +1502,7 @@ func _draw_coin_toss() -> void:
     var font: Font = ThemeDB.fallback_font
     draw_string(font, Vector2(16.0, size.y * 0.32), "ЖЕРЕБЬЁВКА MONSTER BALL", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 24, Color("#ffe2a5"))
     draw_string(font, Vector2(16.0, size.y * 0.66), "СИНИЕ — ПЕРВЫЙ ХОД!" if first_kickoff_team == 1 else "КРАСНЫЕ — ПЕРВЫЙ ХОД!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 21, tone)
-    draw_string(font, Vector2(16.0, size.y * 0.71), "МЯЧ СВОБОДЕН — В ЦЕНТРЕ ПОЛЯ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 14, Color("#fff2cb"))
+    draw_string(font, Vector2(16.0, size.y * 0.71), "МЯЧ СВОБОДЕН — В ЦЕНТРЕ ПОЛЯ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 18, Color("#fff2cb"))
 
 func draw_ellipse_31(center: Vector2, axes: Vector2, fill_color: Color) -> void:
     var outline: PackedVector2Array = PackedVector2Array()
@@ -1520,7 +1517,7 @@ func _draw_halftime_show() -> void:
     draw_string(font, Vector2(10, size.y * 0.22), "ПЕРЕРЫВ — ШОУ МОНСТРОВ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 25, Color("#ffe19b"))
     draw_string(font, Vector2(10, size.y * 0.31), "СЧЁТ  %d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 26, Color.WHITE)
     draw_string(font, Vector2(10, size.y * 0.36), "ГОЛЫ  %d:%d   •   ВЗЯТИЯ  %d:%d" % [match_goals[0], match_goals[1], match_captures[0], match_captures[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 16, Color("#cde7eb"))
-    draw_string(font, Vector2(10, size.y * 0.41), "БЛОКИРОВКИ  %d:%d  •  БОНУСОВ НЕТ" % [match_blocks[0], match_blocks[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 15, Color("#ffe09b"))
+    draw_string(font, Vector2(10, size.y * 0.41), "БЛОКИРОВКИ  %d:%d  •  БОНУСОВ НЕТ" % [match_blocks[0], match_blocks[1]], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20, 18, Color("#ffe09b"))
     for i in 5:
         var xx: float = (float(i) + 0.65) * size.x / 5.5
         var yy: float = size.y * 0.54 + sin(magic_clock * (3.0 + i * 0.15) + i) * 19.0
@@ -1531,14 +1528,14 @@ func _draw_second_half_start() -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.75))
     draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.48), "ВТОРОЙ ТАЙМ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 33, Color("#ffe4a0"))
     draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.55), "ПЕРВЫЙ ХОД СИНИХ" if turn == 1 else "ПЕРВЫЙ ХОД КРАСНЫХ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 19, Color("#4ac5e8") if turn == 1 else Color("#e45a78"))
-    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.60), "МЯЧ — В ЦЕНТРЕ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 15, Color("#ffe2af"))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.60), "МЯЧ — В ЦЕНТРЕ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 19, Color("#ffe2af"))
 
 func _draw_pause_screen() -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.76))
     draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.5), "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 35, Color("#ffcc80"))
-    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.58), "Нажми ПАУЗА сверху, чтобы продолжить", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 16, Color.WHITE)
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.58), "Нажми ИГРАТЬ сверху, чтобы продолжить", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 20, Color.WHITE)
     draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 30.0), Color("#584166"))
-    draw_string(ThemeDB.fallback_font, Vector2(size.x - 99.0, 93.0), "ПРОДОЛЖИТЬ", HORIZONTAL_ALIGNMENT_LEFT, 95.0, 12, Color.WHITE)
+    draw_string(ThemeDB.fallback_font, Vector2(size.x - 99.0, 93.0), "ИГРАТЬ", HORIZONTAL_ALIGNMENT_CENTER, 95.0, 18, Color.WHITE)
 
 func _geometry() -> Dictionary:
     # Reserve space for the large match clock and a side-specific move clock.
@@ -2133,24 +2130,24 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     draw_rect(banner, Color("#e7a85f"), false, 2.0)
     var decisive_phase: bool = final_phase_active and final_actions_remaining > 0
     var half_label: String = "%d-Й ТАЙМ • ФИНИШ" % half_number if decisive_phase else "%d-Й ТАЙМ" % half_number
-    draw_string(font, Vector2(banner.position.x + 4.0, 52.0), half_label, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 8.0, 14, Color("#ffd89c"))
+    draw_string(font, Vector2(banner.position.x + 4.0, 52.0), half_label, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 8.0, 17, Color("#ffd89c"))
     # Round UP so 00:01 is shown until the final fraction of a second has passed.
     var seconds_display: int = maxi(0, ceili(half_remaining))
     var match_text: String = "%02d:%02d" % [seconds_display / 60, seconds_display % 60]
-    draw_string(font, Vector2(banner.position.x + 5.0, 90.0), match_text, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 10.0, 34, Color("#fff5dc"))
+    draw_string(font, Vector2(banner.position.x + 5.0, 90.0), match_text, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 10.0, 40, Color("#fff5dc"))
     # Score on the left and pause on the right, clear of the central clock.
     var score_width: float = maxf(62.0, (size.x - banner_width) * 0.5 - 23.0)
     draw_rect(Rect2(8.0, 50.0, score_width, 47.0), Color("#102638", 0.95))
-    draw_string(font, Vector2(12.0, 62.0), "СЧЁТ", HORIZONTAL_ALIGNMENT_CENTER, score_width - 8.0, 11, Color("#9cdaee"))
-    draw_string(font, Vector2(10.0, 87.0), "%d:%d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_CENTER, score_width - 4.0, 23, Color.WHITE)
+    draw_string(font, Vector2(12.0, 62.0), "СЧЁТ", HORIZONTAL_ALIGNMENT_CENTER, score_width - 8.0, 14, Color("#9cdaee"))
+    draw_string(font, Vector2(10.0, 87.0), "%d:%d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_CENTER, score_width - 4.0, 27, Color.WHITE)
     draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 29.0), Color("#30283c"))
-    draw_string(font, Vector2(size.x - 102.0, 93.0), "ПРОДОЛЖИТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 87.0, 12, Color("#fff2d8"))
+    draw_string(font, Vector2(size.x - 102.0, 93.0), "ИГРАТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 87.0, 17, Color("#fff2d8"))
     draw_string(font, Vector2(12.0, 22.0), "MONSTER BALL · HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 16, Color("#ffc079"))
-    draw_string(font, Vector2(10.0, 123.0), message, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 13, Color("#d9f6f9"))
+    draw_string(font, Vector2(10.0, 123.0), message, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 17, Color("#d9f6f9"))
     if decisive_phase:
-        draw_string(font, Vector2(10.0, 140.0), "ФИНИШ: ОСТАЛОСЬ ХОДОВ — %d" % final_actions_remaining, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
+        draw_string(font, Vector2(10.0, 140.0), "ФИНИШ: ОСТАЛОСЬ ХОДОВ — %d" % final_actions_remaining, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 16, Color("#ffca83"))
     elif consecutive_passes > 0:
-        draw_string(font, Vector2(10.0, 140.0), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
+        draw_string(font, Vector2(10.0, 140.0), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 16, Color("#ffca83"))
     # The RED team defends the top, BLUE the bottom. Show ONLY the active team.
     var red_to_move: bool = turn == 2
     var team_color: Color = Color("#f3617a") if red_to_move else Color("#51d9ff")
@@ -2161,9 +2158,9 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     var clock_rect := Rect2(Vector2(center_x - clock_width * 0.5, clock_y), Vector2(clock_width, 44.0))
     draw_rect(clock_rect, Color("#151323", 0.96))
     draw_rect(clock_rect, team_color, false, 2.5)
-    draw_string(font, Vector2(clock_rect.position.x + 7.0, clock_y + 13.0), "ХОД КРАСНЫХ" if red_to_move else "ХОД СИНИХ", HORIZONTAL_ALIGNMENT_LEFT, clock_width - 58.0, 12, team_color)
+    draw_string(font, Vector2(clock_rect.position.x + 7.0, clock_y + 13.0), "ХОД КРАСНЫХ" if red_to_move else "ХОД СИНИХ", HORIZONTAL_ALIGNMENT_LEFT, clock_width - 58.0, 16, team_color)
     var decision_color: Color = Color("#ffdb77") if decision_remaining <= 5.0 else Color.WHITE
-    draw_string(font, Vector2(clock_rect.position.x + 6.0, clock_y + 36.0), "%02d" % ceili(decision_remaining), HORIZONTAL_ALIGNMENT_RIGHT, clock_width - 12.0, 30, decision_color)
+    draw_string(font, Vector2(clock_rect.position.x + 6.0, clock_y + 36.0), "%02d" % ceili(decision_remaining), HORIZONTAL_ALIGNMENT_RIGHT, clock_width - 12.0, 34, decision_color)
 
 func _draw() -> void:
     var geometry := _geometry()
@@ -2292,10 +2289,10 @@ func _draw() -> void:
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 52), heading, HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 24, Color.WHITE)
         var detail := "Равный счёт" if winner == 0 else ("Победили голубые" if winner == 1 else "Победили красные")
         draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 87), "%s · Счёт %d : %d" % [detail, scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color("#f6cf65"))
-        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 116), "ГОЛЫ (5)        %d : %d" % [match_goals[0], match_goals[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 15, Color("#ffd68e"))
-        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 140), "ВЗЯТИЯ (1)    %d : %d" % [match_captures[0], match_captures[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 15, Color("#c8e9f2"))
-        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 164), "БЛОКИРОВКИ (1) %d : %d" % [match_blocks[0], match_blocks[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 14, Color("#d4c4ff"))
-        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 191), "НОВАЯ ИГРА — сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 13, Color.WHITE)
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 116), "ГОЛЫ (5)        %d : %d" % [match_goals[0], match_goals[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 18, Color("#ffd68e"))
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 140), "ВЗЯТИЯ (1)    %d : %d" % [match_captures[0], match_captures[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 18, Color("#c8e9f2"))
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 164), "БЛОКИРОВКИ (1) %d : %d" % [match_blocks[0], match_blocks[1]], HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color("#d4c4ff"))
+        draw_string(font, Vector2(panel.position.x + 18, panel.position.y + 191), "НОВАЯ ИГРА — сыграть ещё", HORIZONTAL_ALIGNMENT_LEFT, panel.size.x - 36, 17, Color.WHITE)
 
 
     if customization_open:
@@ -2392,11 +2389,11 @@ func _draw_bottom_actions() -> void:
     draw_rect(Rect2(w + 4, y, w - 8, 61), Color("#684026"))
     draw_rect(Rect2(4, y, w - 8, 61), Color("#83d5e4"), false, 2.0)
     draw_rect(Rect2(w + 4, y, w - 8, 61), Color("#ffc17a"), false, 2.0)
-    var left_label: String = "УБРАТЬ ПОСЛЕДНЮЮ" if setup_active else "НОВАЯ ИГРА"
+    var left_label: String = "НАЗАД НА 1 ФИШКУ" if setup_active else "НОВАЯ ИГРА"
     var ready: bool = _setup_cells(setup_team).size() == FOOTBALL_TEAM_SIZE
-    var right_label: String = ("ГОТОВО ✓" if ready else "ПОСТАВЬ ВСЕ 5") if setup_active else "ГЛАВНОЕ МЕНЮ"
-    draw_string(font, Vector2(13, y + 37), left_label, HORIZONTAL_ALIGNMENT_LEFT, w - 17, 14, Color.WHITE)
-    draw_string(font, Vector2(w + 12, y + 37), right_label, HORIZONTAL_ALIGNMENT_LEFT, w - 18, 14, Color.WHITE)
+    var right_label: String = ("ГОТОВО ✓" if ready else "ПОСТАВЬ 5 ФИШЕК") if setup_active else "ГЛАВНОЕ МЕНЮ"
+    draw_string(font, Vector2(13, y + 37), left_label, HORIZONTAL_ALIGNMENT_LEFT, w - 17, 17, Color.WHITE)
+    draw_string(font, Vector2(w + 12, y + 37), right_label, HORIZONTAL_ALIGNMENT_LEFT, w - 18, 17, Color.WHITE)
 
 # Local save data is separate for each browser/PWA installation.
 # There is no online account or server sync in this version.
