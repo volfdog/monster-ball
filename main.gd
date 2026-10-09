@@ -25,7 +25,7 @@ var bot_pending := false
 var winner := 0
 
 # Football 3.1: two REAL-TIME halves and a separate anti-stalling decision clock.
-const HALF_SECONDS: int = 120
+const HALF_SECONDS: int = 150
 # The final 30 seconds are action-based: waiting cannot run out the match clock.
 const FINAL_PHASE_SECONDS: float = 30.0
 const FINAL_PHASE_ACTION_COST: float = 3.0
@@ -212,7 +212,7 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
-    # First 1:30: real-time clock. The final 0:30 FREEZES while thinking,
+    # First 2:00: real-time clock. The final 0:30 FREEZES while thinking,
     # then each completed team action costs 3 seconds. A 20-second timeout
     # forces an action, so a leading team cannot wait out the final seconds.
     # Neither clock runs during intermissions, celebrations, customization or pause.
