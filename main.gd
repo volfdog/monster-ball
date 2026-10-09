@@ -25,7 +25,10 @@ var bot_pending := false
 var winner := 0
 
 # Football 3.1: two REAL-TIME halves and a separate anti-stalling decision clock.
-const HALF_SECONDS: int = 180
+const HALF_SECONDS: int = 120
+# The final 30 seconds are action-based: waiting cannot run out the match clock.
+const FINAL_PHASE_SECONDS: float = 30.0
+const FINAL_PHASE_ACTION_COST: float = 3.0
 const DECISION_SECONDS: float = 20.0
 const HALF_BREAK_SECONDS: float = 7.0
 const COIN_SECONDS: float = 2.8
@@ -206,12 +209,13 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
-    # The match clock runs in real seconds, never faster because of quick turns.
-    # Freeze during coin toss, halftime, goal/win celebrations, menus, and pause.
+    # First 1:30: real-time clock. The final 0:30 FREEZES while thinking,
+    # then each completed team action costs 3 seconds. A 20-second timeout
+    # forces an action, so a leading team cannot wait out the final seconds.
+    # Neither clock runs during intermissions, celebrations, customization or pause.
     if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and pending_skin < 0:
-        half_remaining = maxf(0.0, half_remaining - delta)
-        if half_remaining <= 0.0:
-            _resolve_half_boundary()
+        if half_remaining > FINAL_PHASE_SECONDS:
+            half_remaining = maxf(FINAL_PHASE_SECONDS, half_remaining - delta)
         queue_redraw()
     # Intermission and intro animations are real-time but do not spend match time.
     if coin_remaining > 0.0:
@@ -1031,11 +1035,23 @@ func _new_match() -> void:
     coin_remaining = COIN_SECONDS
     queue_redraw()
 
-func _complete_action_clock() -> void:
-    # A completed move resets only the 20-second decision timer.
-    # The match clock is advanced once per frame in _process().
+func _complete_action_clock() -> bool:
+    # Called once after a FINISHED turn (not between mandatory chain captures).
+    # A goal or complete elimination also constitutes one finished action.
+    # Returns true if the half has just ended and the caller must NOT hand
+    # control to the next player. Goal celebration finishes before the whistle.
     decision_remaining = DECISION_SECONDS
     referee_warning = false
+    if half_remaining <= FINAL_PHASE_SECONDS and half_remaining > 0.0 and not game_over:
+        half_remaining = maxf(0.0, half_remaining - FINAL_PHASE_ACTION_COST)
+        queue_redraw()
+        if half_remaining <= 0.0:
+            if celebrating:
+                phase_after_goal = true
+            else:
+                _resolve_half_boundary()
+            return true
+    return false
 
 func _resolve_half_boundary() -> void:
     # This is idempotent: neither halftime nor the final whistle grants points.
@@ -1470,7 +1486,10 @@ func _check_goal() -> bool:
 
 func _finish_turn() -> void:
     selected = -1
-    _complete_action_clock()
+    # If the last move used the final three seconds, blow the whistle
+    # before handing the turn over or scheduling the red bot.
+    if _complete_action_clock():
+        return
     turn = 2 if turn == 1 else 1
     decision_remaining = DECISION_SECONDS
     referee_warning = false
@@ -1762,7 +1781,9 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     var banner := Rect2(Vector2(center_x - banner_width * 0.5, 34.0), Vector2(banner_width, 69.0))
     draw_rect(banner, Color("#171528", 0.95))
     draw_rect(banner, Color("#e7a85f"), false, 2.0)
-    draw_string(font, Vector2(banner.position.x + 4.0, 52.0), "%d-Й ТАЙМ" % half_number, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 8.0, 14, Color("#ffd89c"))
+    var decisive_phase: bool = half_remaining <= FINAL_PHASE_SECONDS and half_remaining > 0.0
+    var half_label: String = "%d-Й ТАЙМ • ФИНИШ" % half_number if decisive_phase else "%d-Й ТАЙМ" % half_number
+    draw_string(font, Vector2(banner.position.x + 4.0, 52.0), half_label, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 8.0, 14, Color("#ffd89c"))
     # Round UP so 00:01 is shown until the final fraction of a second has passed.
     var seconds_display: int = maxi(0, ceili(half_remaining))
     var match_text: String = "%02d:%02d" % [seconds_display / 60, seconds_display % 60]
@@ -1776,7 +1797,9 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     draw_string(font, Vector2(size.x - 102.0, 93.0), "ПРОДОЛЖИТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 87.0, 12, Color("#fff2d8"))
     draw_string(font, Vector2(12.0, 22.0), "MONSTER BALL · HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 16, Color("#ffc079"))
     draw_string(font, Vector2(10.0, 123.0), message, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 13, Color("#d9f6f9"))
-    if consecutive_passes > 0:
+    if decisive_phase:
+        draw_string(font, Vector2(10.0, 140.0), "РЕШАЮЩАЯ ФАЗА: -3 СЕК ЗА ХОД", HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
+    elif consecutive_passes > 0:
         draw_string(font, Vector2(10.0, 140.0), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
     # The RED team defends the top, BLUE the bottom. Show ONLY the active team.
     var red_to_move: bool = turn == 2
