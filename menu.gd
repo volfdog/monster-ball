@@ -1,9 +1,9 @@
 extends Control
 
-# Full-length CD-quality source converted to an ordinary Godot-compatible WAV.
-# A preload reference makes it an explicit resource dependency of the menu.
-const HD_TITLE_THEME: AudioStream = preload("res://audio/halloween_theme.wav")
-const HD_STADIUM: AudioStream = preload("res://audio/stadium_crowd.wav")
+# Long soundtrack files already imported in the project.
+# Both MP3 resources are verified in the GitHub Actions export log.
+const HD_TITLE_THEME: AudioStream = preload("res://audio/halloween_theme.mp3")
+const HD_STADIUM: AudioStream = preload("res://audio/stadium_crowd.mp3")
 
 var section: String = ""
 var choose_difficulty: bool = false
