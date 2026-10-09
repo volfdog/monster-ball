@@ -312,11 +312,13 @@ func _process(delta: float) -> void:
         queue_redraw()
     magic_clock += delta
     if fmod(magic_clock, 0.11) < delta: queue_redraw()
+    # A slow mobile frame must not make a moving piece teleport across cells.
+    var motion_delta: float = minf(delta, 0.05)
     if fx_progress < 1.0:
-        fx_progress = minf(1.0, fx_progress + delta / fx_duration)
+        fx_progress = minf(1.0, fx_progress + motion_delta / fx_duration)
         queue_redraw()
     if fx_impact_time > 0.0:
-        fx_impact_time = maxf(0.0, fx_impact_time - delta)
+        fx_impact_time = maxf(0.0, fx_impact_time - motion_delta)
         if fx_impact_time <= 0.0:
             fx_victim_index = -1
         queue_redraw()
@@ -324,7 +326,7 @@ func _process(delta: float) -> void:
         fx_bounce_time = maxf(0.0, fx_bounce_time - delta)
         queue_redraw()
     if pass_fx_progress < 1.0:
-        pass_fx_progress = minf(1.0, pass_fx_progress + delta / 0.26)
+        pass_fx_progress = minf(1.0, pass_fx_progress + motion_delta / 0.26)
         queue_redraw()
     if selected >= 0 or drag_active: queue_redraw()
     if customization_open:
@@ -2080,8 +2082,9 @@ func _bot_turn() -> void:
         if ball_holder == best["victim"]:
             ball_holder = selected
     _move_selected(best["to"])
-    if capture_sequence_running:
-        await _wait_for_current_jump()
+    # Do not pass control to the human before the bot piece has arrived.
+    # Waiting for all movements (not just captures) prevents jerky handoffs.
+    await _wait_for_current_jump()
     if not is_inside_tree():
         return
     if _check_elimination():

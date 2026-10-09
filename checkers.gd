@@ -193,11 +193,13 @@ func _process(delta: float) -> void:
         queue_redraw()
     magic_clock += delta
     if fmod(magic_clock, 0.11) < delta: queue_redraw()
+    # Clamp occasional long frames in a mobile browser so the bot does not snap.
+    var motion_delta: float = minf(delta, 0.05)
     if fx_progress < 1.0:
-        fx_progress = minf(1.0, fx_progress + delta / fx_duration)
+        fx_progress = minf(1.0, fx_progress + motion_delta / fx_duration)
         queue_redraw()
     if fx_capture_time > 0.0:
-        fx_capture_time = maxf(0.0, fx_capture_time - delta)
+        fx_capture_time = maxf(0.0, fx_capture_time - motion_delta)
         queue_redraw()
     if fx_bounce_time > 0.0:
         fx_bounce_time = maxf(0.0, fx_bounce_time - delta)
@@ -1511,6 +1513,11 @@ func _ai_choose_checkers_action(options: Array[Dictionary], depth: int) -> Dicti
             best_action = action
     return best_action
 
+func _wait_for_bot_animation() -> void:
+    # Finish the visual movement even if a pause was toggled mid-jump.
+    while is_inside_tree() and (paused_checkers or fx_progress < 0.99):
+        await get_tree().process_frame
+
 func _bot_move() -> void:
     if not is_inside_tree():
         return
@@ -1551,6 +1558,9 @@ func _bot_move() -> void:
         piece_data["king"] = true
         _start_promotion_fx(dest)
     _remember_piece_action(captured, promoted, was_king)
+    await _wait_for_bot_animation()
+    if not is_inside_tree() or game_mode != 0 or finished or turn != 2:
+        return
     if captured.x >= 0 and not promoted and not _captures(dest).is_empty():
         forced = dest
         selected = dest
@@ -1564,7 +1574,8 @@ func _bot_move() -> void:
 func _bot_continue() -> void:
     if not is_inside_tree():
         return
-    await get_tree().create_timer(0.80).timeout
+    # Prior jump was already awaited, leave just a short beat before the next.
+    await get_tree().create_timer(0.20).timeout
     while is_inside_tree() and paused_checkers:
         await get_tree().process_frame
     if not is_inside_tree() or game_mode != 0 or finished or turn != 2:
@@ -1597,6 +1608,9 @@ func _bot_continue() -> void:
         data["king"] = true
         _start_promotion_fx(dest)
     _remember_piece_action(victim, promoted, was_king)
+    await _wait_for_bot_animation()
+    if not is_inside_tree() or game_mode != 0 or finished or turn != 2:
+        return
     forced = dest
     selected = dest
     if not promoted and not _captures(dest).is_empty():
