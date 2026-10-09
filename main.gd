@@ -12,6 +12,7 @@ const BALL := Color("#f6cf65")
 
 var pieces: Array[Dictionary] = []
 var ball_cell := Vector2i(4, 4)
+# A free ball spawns in the center two rows, on reachable diagonal squares.
 var ball_holder := -1
 var turn := 1
 var selected := -1
@@ -966,14 +967,30 @@ func _reset_board(kickoff_team: int = 1) -> void:
         pieces.append({"team": 1, "cell": cell, "alive": true})
     for cell in [Vector2i(0, 0), Vector2i(0, 2), Vector2i(0, 4), Vector2i(0, 6), Vector2i(1, 3)]:
         pieces.append({"team": 2, "cell": cell, "alive": true})
-    # The team granted kickoff begins with the ball at its forward player.
-    ball_holder = 4 if kickoff_team == 1 else 9
-    ball_cell = pieces[ball_holder]["cell"]
+    # The coin awards the FIRST MOVE, never immediate possession.
+    # Choose one of the 8 playable central squares (even row+column parity).
+    # Both teams must travel to the unclaimed pumpkin to pick it up.
+    _spawn_free_ball_center()
     selected = -1
     turn = kickoff_team
     bot_pending = false
-    message = "ПЕРВЫМИ ИГРАЮТ СИНИЕ!" if kickoff_team == 1 else "ПЕРВЫМИ ИГРАЮТ КРАСНЫЕ!"
+    message = "СИНИЕ ПЕРВЫМИ ИДУТ К МЯЧУ!" if kickoff_team == 1 else "КРАСНЫЕ ПЕРВЫМИ ИДУТ К МЯЧУ!"
     queue_redraw()
+
+func _spawn_free_ball_center() -> void:
+    ball_holder = -1
+    var candidates: Array[Vector2i] = []
+    for center_row in [4, 5]:
+        for column in COLS:
+            var candidate := Vector2i(center_row, column)
+            # All our players remain on even parity squares after diagonal moves.
+            if (center_row + column) % 2 == 0 and _piece_at(candidate) < 0:
+                candidates.append(candidate)
+    if candidates.is_empty():
+        # Should not occur with the normal starting formation.
+        ball_cell = Vector2i(4, 4)
+    else:
+        ball_cell = candidates.pick_random()
 
 # === Monster Ball 3.1 match director ===
 func _new_match() -> void:
@@ -1017,7 +1034,7 @@ func _begin_second_half() -> void:
     half_remaining = HALF_SECONDS
     _reset_board(3 - first_kickoff_team)
     opening_second_half = 2.0
-    message = "2-Й ТАЙМ! РАЗЫГРЫВАЮТ СИНИЕ" if turn == 1 else "2-Й ТАЙМ! РАЗЫГРЫВАЮТ КРАСНЫЕ"
+    message = "2-Й ТАЙМ! ПЕРВЫЙ ХОД СИНИХ" if turn == 1 else "2-Й ТАЙМ! ПЕРВЫЙ ХОД КРАСНЫХ"
     queue_redraw()
 
 func _finish_match() -> void:
@@ -1113,7 +1130,8 @@ func _draw_coin_toss() -> void:
     _draw_referee(cx + Vector2(0, 120), 1.25)
     var font: Font = ThemeDB.fallback_font
     draw_string(font, Vector2(16.0, size.y * 0.32), "ЖЕРЕБЬЁВКА MONSTER BALL", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 24, Color("#ffe2a5"))
-    draw_string(font, Vector2(16.0, size.y * 0.66), "СИНИЕ НАЧИНАЮТ!" if first_kickoff_team == 1 else "КРАСНЫЕ НАЧИНАЮТ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 23, tone)
+    draw_string(font, Vector2(16.0, size.y * 0.66), "СИНИЕ — ПЕРВЫЙ ХОД!" if first_kickoff_team == 1 else "КРАСНЫЕ — ПЕРВЫЙ ХОД!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 21, tone)
+    draw_string(font, Vector2(16.0, size.y * 0.71), "МЯЧ СВОБОДЕН — В ЦЕНТРЕ ПОЛЯ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 32.0, 14, Color("#fff2cb"))
 
 func draw_ellipse_31(center: Vector2, axes: Vector2, fill_color: Color) -> void:
     var outline: PackedVector2Array = PackedVector2Array()
@@ -1136,7 +1154,8 @@ func _draw_halftime_show() -> void:
 func _draw_second_half_start() -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.75))
     draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.48), "ВТОРОЙ ТАЙМ!", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 33, Color("#ffe4a0"))
-    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.55), "НАЧИНАЮТ СИНИЕ" if turn == 1 else "НАЧИНАЮТ КРАСНЫЕ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 19, Color("#4ac5e8") if turn == 1 else Color("#e45a78"))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.55), "ПЕРВЫЙ ХОД СИНИХ" if turn == 1 else "ПЕРВЫЙ ХОД КРАСНЫХ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 19, Color("#4ac5e8") if turn == 1 else Color("#e45a78"))
+    draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.60), "МЯЧ — В ЦЕНТРЕ", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24, 15, Color("#ffe2af"))
 
 func _draw_pause_screen() -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.76))
@@ -1146,8 +1165,9 @@ func _draw_pause_screen() -> void:
     draw_string(ThemeDB.fallback_font, Vector2(size.x - 99.0, 93.0), "ПРОДОЛЖИТЬ", HORIZONTAL_ALIGNMENT_LEFT, 95.0, 12, Color.WHITE)
 
 func _geometry() -> Dictionary:
-    var top_margin := 154.0
-    var bottom_margin := 85.0
+    # Reserve space for the large match clock and a side-specific move clock.
+    var top_margin := 196.0
+    var bottom_margin := 144.0
     var side_margin := 29.0
     var usable := Vector2(max(1.0, size.x - 2.0 * side_margin), max(1.0, size.y - top_margin - bottom_margin))
     var cell_size: float = floor(min(usable.x / COLS, usable.y / ROWS))
@@ -1690,21 +1710,50 @@ func _bot_turn() -> void:
                 return
     _finish_turn()
 
+# Central match time and large 20-second decision clock on the side now moving.
+func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> void:
+    # Leave touch coordinates of the pause control unchanged (top-right, y<115).
+    var banner_width: float = maxf(104.0, minf(182.0, size.x - 212.0))
+    var center_x: float = size.x * 0.5
+    var banner := Rect2(Vector2(center_x - banner_width * 0.5, 34.0), Vector2(banner_width, 69.0))
+    draw_rect(banner, Color("#171528", 0.95))
+    draw_rect(banner, Color("#e7a85f"), false, 2.0)
+    draw_string(font, Vector2(banner.position.x + 4.0, 52.0), "%d-Й ТАЙМ" % half_number, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 8.0, 14, Color("#ffd89c"))
+    var match_text: String = "%02d:%02d" % [int(half_remaining / 60), half_remaining % 60]
+    draw_string(font, Vector2(banner.position.x + 5.0, 90.0), match_text, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 10.0, 34, Color("#fff5dc"))
+    # Score on the left and pause on the right, clear of the central clock.
+    var score_width: float = maxf(62.0, (size.x - banner_width) * 0.5 - 23.0)
+    draw_rect(Rect2(8.0, 50.0, score_width, 47.0), Color("#102638", 0.95))
+    draw_string(font, Vector2(12.0, 62.0), "СЧЁТ", HORIZONTAL_ALIGNMENT_CENTER, score_width - 8.0, 11, Color("#9cdaee"))
+    draw_string(font, Vector2(10.0, 87.0), "%d:%d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_CENTER, score_width - 4.0, 23, Color.WHITE)
+    draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 29.0), Color("#30283c"))
+    draw_string(font, Vector2(size.x - 102.0, 93.0), "ПРОДОЛЖИТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 87.0, 12, Color("#fff2d8"))
+    draw_string(font, Vector2(12.0, 22.0), "MONSTER BALL · HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 16, Color("#ffc079"))
+    draw_string(font, Vector2(10.0, 123.0), message, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 13, Color("#d9f6f9"))
+    if consecutive_passes > 0:
+        draw_string(font, Vector2(10.0, 140.0), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
+    # The RED team defends the top, BLUE the bottom. Show ONLY the active team.
+    var red_to_move: bool = turn == 2
+    var team_color: Color = Color("#f3617a") if red_to_move else Color("#51d9ff")
+    var clock_width: float = minf(202.0, size.x * 0.57)
+    var board_end: float = board_origin.y + float(ROWS) * cell_side
+    var clock_y: float = board_origin.y - 52.0 if red_to_move else board_end + 8.0
+    clock_y = clampf(clock_y, 145.0, size.y - 135.0)
+    var clock_rect := Rect2(Vector2(center_x - clock_width * 0.5, clock_y), Vector2(clock_width, 44.0))
+    draw_rect(clock_rect, Color("#151323", 0.96))
+    draw_rect(clock_rect, team_color, false, 2.5)
+    draw_string(font, Vector2(clock_rect.position.x + 7.0, clock_y + 13.0), "ХОД КРАСНЫХ" if red_to_move else "ХОД СИНИХ", HORIZONTAL_ALIGNMENT_LEFT, clock_width - 58.0, 12, team_color)
+    var decision_color: Color = Color("#ffdb77") if decision_remaining <= 5.0 else Color.WHITE
+    draw_string(font, Vector2(clock_rect.position.x + 6.0, clock_y + 36.0), "%02d" % ceili(decision_remaining), HORIZONTAL_ALIGNMENT_RIGHT, clock_width - 12.0, 30, decision_color)
+
 func _draw() -> void:
     var geometry := _geometry()
     var side: float = geometry["cell_size"]
     var offset: Vector2 = geometry["offset"]
     _halloween_arena(offset, Vector2(COLS * side, ROWS * side))
     var font: Font = ThemeDB.fallback_font
-    draw_string(font, Vector2(18, 27), "MONSTER BALL  /  HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36.0, 18, Color("#ffc079"))
-    draw_string(font, Vector2(18, 48), "%d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("#dffcff"))
-    draw_string(font, Vector2(18, 68), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 14, Color("#d9f6f9"))
-    draw_string(font, Vector2(18, 88), "%d-Й ТАЙМ   %02d:%02d | ХОД %02d" % [half_number, half_remaining / 60, half_remaining % 60, ceili(decision_remaining)], HORIZONTAL_ALIGNMENT_LEFT, size.x - 134.0, 14, Color("#ffdc83"))
-    if consecutive_passes > 0:
-        draw_string(font, Vector2(18, 111), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_LEFT, size.x - 145.0, 13, Color("#ffcb83"))
-    draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 29.0), Color("#30283c"))
-    draw_string(font, Vector2(size.x - 99.0, 93.0), "ПРОДОЛЖИТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_LEFT, 95, 12, Color("#fff2d8"))
-    _draw_referee(Vector2(size.x - 25.0, 147.0), 0.85)
+    _draw_match_clocks(offset, side, font)
+    _draw_referee(Vector2(size.x - 24.0, 168.0), 0.76)
     # Fantasy stone board. Geometry and input coordinates stay unchanged.
     var board_size := Vector2(COLS * side, ROWS * side)
     draw_rect(Rect2(offset - Vector2(6, 6), board_size + Vector2(12, 12)), Color("#0b1925"))
