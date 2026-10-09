@@ -29,11 +29,14 @@ const HALF_SECONDS: int = 120
 # The final 30 seconds are action-based: waiting cannot run out the match clock.
 const FINAL_PHASE_SECONDS: float = 30.0
 const FINAL_PHASE_ACTION_COST: float = 3.0
+const FINAL_PHASE_ACTIONS: int = 10
 const DECISION_SECONDS: float = 20.0
 const HALF_BREAK_SECONDS: float = 7.0
 const COIN_SECONDS: float = 2.8
 var half_number: int = 1
 var half_remaining: float = float(HALF_SECONDS)
+var final_phase_active: bool = false
+var final_actions_remaining: int = FINAL_PHASE_ACTIONS
 # Monster Score: actual goals are worth 5; each eliminated rival is worth 1.
 # Every capture is counted as it happens, including the final fifth player.
 var match_goals := [0, 0]
@@ -214,8 +217,12 @@ func _process(delta: float) -> void:
     # forces an action, so a leading team cannot wait out the final seconds.
     # Neither clock runs during intermissions, celebrations, customization or pause.
     if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and pending_skin < 0:
-        if half_remaining > FINAL_PHASE_SECONDS:
+        if not final_phase_active:
             half_remaining = maxf(FINAL_PHASE_SECONDS, half_remaining - delta)
+            if half_remaining <= FINAL_PHASE_SECONDS:
+                _begin_final_phase()
+        # In final phase, the main clock never uses delta: only completed turns
+        # count down, explicitly tracked by final_actions_remaining.
         queue_redraw()
     # Intermission and intro animations are real-time but do not spend match time.
     if coin_remaining > 0.0:
@@ -954,6 +961,8 @@ func _ready() -> void:
     first_kickoff_team = randi_range(1, 2)
     half_number = 1
     half_remaining = float(HALF_SECONDS)
+    final_phase_active = false
+    final_actions_remaining = FINAL_PHASE_ACTIONS
     _reset_board(first_kickoff_team)
     coin_remaining = COIN_SECONDS
     game_mode = int(get_tree().root.get_meta("mb_mode", 0))
@@ -1030,32 +1039,53 @@ func _new_match() -> void:
     match_blocks = [0, 0]
     half_number = 1
     half_remaining = float(HALF_SECONDS)
+    final_phase_active = false
+    final_actions_remaining = FINAL_PHASE_ACTIONS
     first_kickoff_team = randi_range(1, 2)
     _reset_board(first_kickoff_team)
     coin_remaining = COIN_SECONDS
     queue_redraw()
 
+func _begin_final_phase() -> void:
+    # One transition per half. IMPORTANT: arriving at 00:30 never ends a half.
+    if final_phase_active or game_over or boundary_resolved_half == half_number:
+        return
+    final_phase_active = true
+    final_actions_remaining = FINAL_PHASE_ACTIONS
+    half_remaining = FINAL_PHASE_SECONDS
+    message = "РЕШАЮЩАЯ ФАЗА — 10 ХОДОВ ДО СВИСТКА!"
+    queue_redraw()
+
 func _complete_action_clock() -> bool:
-    # Called once after a FINISHED turn (not between mandatory chain captures).
-    # A goal or complete elimination also constitutes one finished action.
-    # Returns true if the half has just ended and the caller must NOT hand
-    # control to the next player. Goal celebration finishes before the whistle.
+    # Count one COMPLETED turn/pass, not frames or jumps within a capture chain.
+    # Only 10 real actions after 00:30 can finish the half.
     decision_remaining = DECISION_SECONDS
     referee_warning = false
-    if half_remaining <= FINAL_PHASE_SECONDS and half_remaining > 0.0 and not game_over:
-        half_remaining = maxf(0.0, half_remaining - FINAL_PHASE_ACTION_COST)
-        queue_redraw()
-        if half_remaining <= 0.0:
-            if celebrating:
-                phase_after_goal = true
-            else:
-                _resolve_half_boundary()
-            return true
+    if game_over or boundary_resolved_half == half_number:
+        return true
+    if half_remaining <= FINAL_PHASE_SECONDS and not final_phase_active:
+        _begin_final_phase()
+    if not final_phase_active:
+        return false
+    if final_actions_remaining <= 0:
+        return true
+    final_actions_remaining -= 1
+    half_remaining = float(final_actions_remaining) * FINAL_PHASE_ACTION_COST
+    queue_redraw()
+    if final_actions_remaining == 0:
+        # Let goals/eliminations celebrate before halftime or match end.
+        if celebrating:
+            phase_after_goal = true
+        else:
+            _resolve_half_boundary()
+        return true
     return false
 
 func _resolve_half_boundary() -> void:
-    # This is idempotent: neither halftime nor the final whistle grants points.
+    # An explicit safety gate: 00:30 alone can NEVER cause a whistle.
     if boundary_resolved_half == half_number:
+        return
+    if not final_phase_active or final_actions_remaining > 0:
         return
     boundary_resolved_half = half_number
 
@@ -1079,6 +1109,8 @@ func _resolve_half_boundary() -> void:
 func _begin_second_half() -> void:
     half_number = 2
     half_remaining = float(HALF_SECONDS)
+    final_phase_active = false
+    final_actions_remaining = FINAL_PHASE_ACTIONS
     _reset_board(3 - first_kickoff_team)
     opening_second_half = 2.0
     message = "2-Й ТАЙМ! ПЕРВЫЙ ХОД СИНИХ" if turn == 1 else "2-Й ТАЙМ! ПЕРВЫЙ ХОД КРАСНЫХ"
@@ -1781,7 +1813,7 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     var banner := Rect2(Vector2(center_x - banner_width * 0.5, 34.0), Vector2(banner_width, 69.0))
     draw_rect(banner, Color("#171528", 0.95))
     draw_rect(banner, Color("#e7a85f"), false, 2.0)
-    var decisive_phase: bool = half_remaining <= FINAL_PHASE_SECONDS and half_remaining > 0.0
+    var decisive_phase: bool = final_phase_active and final_actions_remaining > 0
     var half_label: String = "%d-Й ТАЙМ • ФИНИШ" % half_number if decisive_phase else "%d-Й ТАЙМ" % half_number
     draw_string(font, Vector2(banner.position.x + 4.0, 52.0), half_label, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 8.0, 14, Color("#ffd89c"))
     # Round UP so 00:01 is shown until the final fraction of a second has passed.
@@ -1798,7 +1830,7 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     draw_string(font, Vector2(12.0, 22.0), "MONSTER BALL · HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 20.0, 16, Color("#ffc079"))
     draw_string(font, Vector2(10.0, 123.0), message, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 13, Color("#d9f6f9"))
     if decisive_phase:
-        draw_string(font, Vector2(10.0, 140.0), "РЕШАЮЩАЯ ФАЗА: -3 СЕК ЗА ХОД", HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
+        draw_string(font, Vector2(10.0, 140.0), "ФИНИШ: ОСТАЛОСЬ ХОДОВ — %d" % final_actions_remaining, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
     elif consecutive_passes > 0:
         draw_string(font, Vector2(10.0, 140.0), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 12, Color("#ffca83"))
     # The RED team defends the top, BLUE the bottom. Show ONLY the active team.
