@@ -24,14 +24,13 @@ var game_over := false
 var bot_pending := false
 var winner := 0
 
-# Football 3.1: two halves, action-based match clock, anti-stalling move clock.
+# Football 3.1: two REAL-TIME halves and a separate anti-stalling decision clock.
 const HALF_SECONDS: int = 120
-const ACTION_SECONDS: int = 4
 const DECISION_SECONDS: float = 20.0
 const HALF_BREAK_SECONDS: float = 7.0
 const COIN_SECONDS: float = 2.8
 var half_number: int = 1
-var half_remaining: int = HALF_SECONDS
+var half_remaining: float = float(HALF_SECONDS)
 var first_kickoff_team: int = 1
 var active_kickoff_team: int = 1
 var decision_remaining: float = DECISION_SECONDS
@@ -201,7 +200,14 @@ func _process(delta: float) -> void:
         if background_audio_poll > 2.0:
             background_audio_poll = 0.0
             _resume_background_audio()
-    # Play clocks remain frozen during celebrations, coin toss and halftime.
+    # The match clock runs in real seconds, never faster because of quick turns.
+    # Freeze during coin toss, halftime, goal/win celebrations, menus, and pause.
+    if not paused_match and not game_over and not celebrating and coin_remaining <= 0.0 and halftime_remaining <= 0.0 and opening_second_half <= 0.0 and not customization_open and pending_skin < 0:
+        half_remaining = maxf(0.0, half_remaining - delta)
+        if half_remaining <= 0.0:
+            _resolve_half_boundary()
+        queue_redraw()
+    # Intermission and intro animations are real-time but do not spend match time.
     if coin_remaining > 0.0:
         coin_remaining = maxf(0.0, coin_remaining - delta)
         if coin_remaining <= 0.0:
@@ -905,7 +911,7 @@ func _award_point(team_id: int, reason: String, spend_clock: bool = true) -> voi
     bot_pending = false
     message = "%s  %d : %d" % [reason, scores[0], scores[1]]
     if spend_clock:
-        _advance_match_clock()
+        _complete_action_clock()
     _play_sfx("goal")
     _play_sfx("crowd", "crowd")
     queue_redraw()
@@ -927,7 +933,7 @@ func _ready() -> void:
     _load_fantasy_assets()
     first_kickoff_team = randi_range(1, 2)
     half_number = 1
-    half_remaining = HALF_SECONDS
+    half_remaining = float(HALF_SECONDS)
     _reset_board(first_kickoff_team)
     coin_remaining = COIN_SECONDS
     game_mode = int(get_tree().root.get_meta("mb_mode", 0))
@@ -999,23 +1005,17 @@ func _new_match() -> void:
     game_over = false
     phase_after_goal = false
     half_number = 1
-    half_remaining = HALF_SECONDS
+    half_remaining = float(HALF_SECONDS)
     first_kickoff_team = randi_range(1, 2)
     _reset_board(first_kickoff_team)
     coin_remaining = COIN_SECONDS
     queue_redraw()
 
-func _advance_match_clock() -> bool:
-    half_remaining = maxi(0, half_remaining - ACTION_SECONDS)
+func _complete_action_clock() -> void:
+    # A completed move resets only the 20-second decision timer.
+    # The match clock is advanced once per frame in _process().
     decision_remaining = DECISION_SECONDS
     referee_warning = false
-    if half_remaining == 0:
-        if celebrating:
-            phase_after_goal = true
-        else:
-            _resolve_half_boundary()
-        return true
-    return false
 
 func _resolve_half_boundary() -> void:
     if half_number == 1:
@@ -1031,7 +1031,7 @@ func _resolve_half_boundary() -> void:
 
 func _begin_second_half() -> void:
     half_number = 2
-    half_remaining = HALF_SECONDS
+    half_remaining = float(HALF_SECONDS)
     _reset_board(3 - first_kickoff_team)
     opening_second_half = 2.0
     message = "2-Й ТАЙМ! ПЕРВЫЙ ХОД СИНИХ" if turn == 1 else "2-Й ТАЙМ! ПЕРВЫЙ ХОД КРАСНЫХ"
@@ -1427,8 +1427,7 @@ func _check_goal() -> bool:
 
 func _finish_turn() -> void:
     selected = -1
-    if _advance_match_clock():
-        return
+    _complete_action_clock()
     turn = 2 if turn == 1 else 1
     decision_remaining = DECISION_SECONDS
     referee_warning = false
@@ -1719,7 +1718,9 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     draw_rect(banner, Color("#171528", 0.95))
     draw_rect(banner, Color("#e7a85f"), false, 2.0)
     draw_string(font, Vector2(banner.position.x + 4.0, 52.0), "%d-Й ТАЙМ" % half_number, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 8.0, 14, Color("#ffd89c"))
-    var match_text: String = "%02d:%02d" % [int(half_remaining / 60), half_remaining % 60]
+    # Round UP so 00:01 is shown until the final fraction of a second has passed.
+    var seconds_display: int = maxi(0, ceili(half_remaining))
+    var match_text: String = "%02d:%02d" % [seconds_display / 60, seconds_display % 60]
     draw_string(font, Vector2(banner.position.x + 5.0, 90.0), match_text, HORIZONTAL_ALIGNMENT_CENTER, banner.size.x - 10.0, 34, Color("#fff5dc"))
     # Score on the left and pause on the right, clear of the central clock.
     var score_width: float = maxf(62.0, (size.x - banner_width) * 0.5 - 23.0)
