@@ -1,5 +1,8 @@
 extends Control
 
+# Explicit dependency: the exported Godot Web build must include this recording.
+const HD_STADIUM: AudioStream = preload("res://audio/stadium_crowd.mp3")
+
 const ROWS := 10
 const COLS := 8
 const FOOTBALL_TEAM_SIZE := 5
@@ -76,17 +79,13 @@ func _setup_game_audio() -> void:
             if ResourceLoader.exists(alternate):
                 sound_library[track_name] = load(alternate)
                 break
+    # Never use the short/synthetic background: force the long WAV stadium recording.
+    sound_library["stadium_crowd"] = HD_STADIUM
     arena_music = AudioStreamPlayer.new()
     arena_music.name = "HalloweenAmbience"
     add_child(arena_music)
-    if sound_library.has("arena_ambience"):
-        var ambience: AudioStream = sound_library["arena_ambience"]
-        var wav_ambience: AudioStreamWAV = ambience as AudioStreamWAV
-        if wav_ambience != null:
-            # Do not use native WAV looping with an unset end point.
-            wav_ambience.loop_mode = AudioStreamWAV.LOOP_DISABLED
-        arena_music.stream = ambience
-        arena_music.finished.connect(_restart_arena_ambience)
+    # Old synthetic arena_ambience is deliberately silent in the HD mix;
+    # the stadium player below provides the single continuous match background.
 
     crowd_ambience = AudioStreamPlayer.new()
     crowd_ambience.name = "HalloweenCrowdBackground"
