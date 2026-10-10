@@ -265,7 +265,7 @@ func _process(delta: float) -> void:
         # count down, explicitly tracked by final_actions_remaining.
         queue_redraw()
     # Intermission and intro animations are real-time but do not spend match time.
-    if coin_remaining > 0.0:
+    if coin_remaining > 0.0 and not customization_open:
         coin_remaining = maxf(0.0, coin_remaining - delta)
         if coin_remaining <= 0.0:
             _start_kickoff_whistle()
@@ -315,7 +315,14 @@ func _process(delta: float) -> void:
     # A slow mobile frame must not make a moving piece teleport across cells.
     var motion_delta: float = minf(delta, 0.05)
     if fx_progress < 1.0:
-        fx_progress = minf(1.0, fx_progress + motion_delta / fx_duration)
+        var old_fx_progress: float = fx_progress
+        fx_progress = minf(1.0, fx_progress + motion_delta / maxf(0.01, fx_duration))
+        if old_fx_progress < 1.0 and fx_progress >= 1.0:
+            fx_landing_cell = fx_to
+            fx_landing_time = FX_LANDING_SECONDS
+        queue_redraw()
+    if fx_landing_time > 0.0:
+        fx_landing_time = maxf(0.0, fx_landing_time - motion_delta)
         queue_redraw()
     if fx_impact_time > 0.0:
         fx_impact_time = maxf(0.0, fx_impact_time - motion_delta)
@@ -326,7 +333,7 @@ func _process(delta: float) -> void:
         fx_bounce_time = maxf(0.0, fx_bounce_time - delta)
         queue_redraw()
     if pass_fx_progress < 1.0:
-        pass_fx_progress = minf(1.0, pass_fx_progress + motion_delta / 0.26)
+        pass_fx_progress = minf(1.0, pass_fx_progress + motion_delta / 0.18)
         queue_redraw()
     if selected >= 0 or drag_active: queue_redraw()
     if customization_open:
@@ -804,7 +811,7 @@ func _drag_event(event: InputEvent) -> bool:
                     fx_bounce_from = _drag_cell_center(old)
                     fx_bounce_start = point
                     fx_bounce_piece = selected
-                    fx_bounce_time = 0.22
+                    fx_bounce_time = 0.17
             drag_moved = false
             queue_redraw()
         return true
@@ -842,13 +849,15 @@ func _drag_point_to_cell(point: Vector2) -> Vector2i:
     var g: Dictionary = _geometry()
     var side: float = g["cell_size"]
     var origin: Vector2 = g["offset"]
+    if _landscape_mode():
+        return Vector2i(ROWS - 1 - int(floor((point.x - origin.x) / side)), int(floor((point.y - origin.y) / side)))
     return Vector2i(int(floor((point.y - origin.y) / side)), int(floor((point.x - origin.x) / side)))
 
 func _drag_cell_center(cell: Vector2i) -> Vector2:
     var g: Dictionary = _geometry()
     var side: float = g["cell_size"]
     var origin: Vector2 = g["offset"]
-    return origin + Vector2(cell.y + 0.5, cell.x + 0.5) * side
+    return _board_center(cell, origin, side)
 
 func _drag_cell_valid(cell: Vector2i) -> bool:
     return _inside(cell)
@@ -889,18 +898,18 @@ func _draw_drag_hints() -> void:
     var mandatory: bool = _team_must_capture(turn)
     for capture in _captures(selected):
         var target: Vector2i = capture["cell"]
-        _magic_ring(origin + Vector2(target.y + 0.5, target.x + 0.5) * side, side * 0.28, Color("#ff6835"))
+        _magic_ring(_board_center(target, origin, side), side * 0.28, Color("#ff6835"))
     if mandatory: return
     if ball_holder == selected:
         for teammate in pieces.size():
             if _can_pass(selected, teammate):
                 var receiver_cell: Vector2i = pieces[teammate]["cell"]
-                _magic_ring(origin + Vector2(receiver_cell.y + 0.5, receiver_cell.x + 0.5) * side, side * 0.39, Color("#ffca62"), true)
+                _magic_ring(_board_center(receiver_cell, origin, side), side * 0.39, Color("#ffca62"), true)
     for direction in [Vector2i(-1,-1),Vector2i(-1,1),Vector2i(1,-1),Vector2i(1,1)]:
         var target: Vector2i = origin_cell + direction
         var forward: int = -1 if turn == 1 else 1
         if _inside(target) and _piece_at(target) < 0 and (ball_holder != selected or direction.x == forward):
-            _magic_ring(origin + Vector2(target.y + 0.5, target.x + 0.5) * side, side * 0.28, Color("#71f9b0"))
+            _magic_ring(_board_center(target, origin, side), side * 0.28, Color("#71f9b0"))
 
 
 # Visual-only animations; the board rules update immediately.
@@ -908,7 +917,12 @@ var fx_piece: int = -1
 var fx_from: Vector2i = Vector2i(-1, -1)
 var fx_to: Vector2i = Vector2i(-1, -1)
 var fx_progress: float = 1.0
-var fx_duration: float = 0.60
+var fx_duration: float = 0.28
+# Lightweight glow on landing: drawing only, never an extra scene object.
+var fx_landing_time: float = 0.0
+const FX_LANDING_SECONDS: float = 0.24
+var fx_landing_cell: Vector2i = Vector2i(-1, -1)
+var fx_landing_team: int = 1
 var fx_impact: Vector2i = Vector2i(-1, -1)
 var fx_impact_time: float = 0.0
 # A captured monster should still be visible while the attacker jumps over it.
@@ -938,7 +952,11 @@ func _start_move_fx(index: int, origin: Vector2i, destination: Vector2i) -> void
     fx_from = origin
     fx_to = destination
     fx_progress = 0.0
-    fx_duration = 0.60
+    # Captures get a slightly longer leap so the removed token remains readable.
+    # Ordinary football movements are deliberately snappy.
+    fx_duration = 0.36 if fx_victim_index >= 0 and fx_impact_time > 0.0 else 0.28
+    fx_landing_team = int(pieces[index]["team"])
+    fx_landing_time = 0.0
 
 func _start_hit_fx(victim_index: int) -> void:
     # The rules may remove the victim immediately, but its last image remains
@@ -949,11 +967,22 @@ func _start_hit_fx(victim_index: int) -> void:
     fx_victim_index = victim_index
     fx_victim_cell = pieces[victim_index]["cell"]
     fx_impact = fx_victim_cell
-    fx_impact_time = 0.68
+    fx_impact_time = 0.43
 
 func _draw_game_fx() -> void:
     var g: Dictionary = _geometry()
     var side: float = g["cell_size"]
+    if fx_landing_time > 0.0 and _inside(fx_landing_cell):
+        var landing_t: float = 1.0 - fx_landing_time / FX_LANDING_SECONDS
+        var landing_center: Vector2 = _drag_cell_center(fx_landing_cell)
+        var landing_color: Color = Color("#56dffe") if fx_landing_team == 1 else Color("#ff8754")
+        # A small expanding halo and six sparks, avoiding expensive particle systems.
+        draw_arc(landing_center, side * (0.19 + 0.31 * landing_t), 0.0, TAU, 20, Color(landing_color.r, landing_color.g, landing_color.b, 0.70 * (1.0 - landing_t)), 2.3)
+        for spark_i in 6:
+            var spark_angle: float = TAU * float(spark_i) / 6.0
+            var spark_dir: Vector2 = Vector2(cos(spark_angle), sin(spark_angle))
+            var spark_pos: Vector2 = landing_center + spark_dir * side * (0.19 + landing_t * 0.43)
+            draw_circle(spark_pos, side * 0.034, Color(landing_color.r, landing_color.g, landing_color.b, 0.80 * (1.0 - landing_t)))
     if pass_fx_progress < 1.0 and _inside(pass_fx_from) and _inside(pass_fx_to):
         var start: Vector2 = _drag_cell_center(pass_fx_from)
         var finish: Vector2 = _drag_cell_center(pass_fx_to)
@@ -965,7 +994,7 @@ func _draw_game_fx() -> void:
             _draw_ghost_pumpkin(center, side * 0.17)
     if fx_impact_time > 0.0 and _inside(fx_impact):
         var center: Vector2 = _drag_cell_center(fx_impact)
-        var t: float = 1.0 - fx_impact_time / 0.68
+        var t: float = 1.0 - fx_impact_time / 0.43
         if fx_victim_index >= 0 and fx_victim_index < pieces.size():
             # Victim remains solid until the attack reaches its square, then
             # dissolves in a glow rather than popping off the board instantly.
@@ -984,7 +1013,7 @@ func _draw_game_fx() -> void:
             var d: Vector2 = Vector2(cos(a), sin(a))
             draw_line(center + d * side * t * 0.20, center + d * side * (0.18 + t * 0.42), Color(1.0, 0.75, 0.25, 1.0-t), 2.5)
     if fx_bounce_time > 0.0:
-        var t: float = 1.0 - fx_bounce_time / 0.22
+        var t: float = 1.0 - fx_bounce_time / 0.17
         var c: Vector2 = fx_bounce_start.lerp(fx_bounce_from, t)
         if fx_bounce_piece >= 0 and fx_bounce_piece < pieces.size():
             var team_id: int = int(pieces[fx_bounce_piece]["team"])
@@ -1063,7 +1092,36 @@ func _ready() -> void:
         else:
             for j in mini(saved.size(), piece_skins.size()):
                 piece_skins[j] = clampi(int(saved[j]), 0, 3)
-    _start_setup()
+    _start_default_match()
+
+# Monster Ball 3.1: instant kickoff with a compact 3-2 formation.
+# Three players on the home rank, two placed diagonally between them one rank ahead.
+# The same pattern returns after each goal and at halftime; the coin decides
+# the first MOVE towards the unclaimed pumpkin.
+func _start_default_match() -> void:
+    setup_active = false
+    setup_template = -1
+    setup_blue.clear()
+    setup_red.clear()
+    # Playable checkered squares alternate by rank. A perfectly centered three-token
+    # back line is impossible on an even-width 8-column board, so we use the
+    # tightest legal staggered 3-2 and mirror it for the opponent.
+    # Blue: 3 home (row 9), 2 forwards (row 8) BETWEEN the back-line pieces.
+    setup_blue.append_array([Vector2i(9, 1), Vector2i(9, 3), Vector2i(9, 5), Vector2i(8, 2), Vector2i(8, 4)])
+    # Red mirrors Blue through the exact middle of the board.
+    setup_red.append_array([Vector2i(0, 6), Vector2i(0, 4), Vector2i(0, 2), Vector2i(1, 5), Vector2i(1, 3)])
+    selected = -1
+    paused_match = false
+    halftime_remaining = 0.0
+    opening_second_half = 0.0
+    celebrating = false
+    drag_active = false
+    bot_pending = false
+    first_kickoff_team = randi_range(1, 2)
+    _reset_board(first_kickoff_team)
+    coin_remaining = COIN_SECONDS
+    message = "ЖЕРЕБЬЁВКА — ПЕРВЫЙ ХОД К СВОБОДНОМУ МЯЧУ"
+    queue_redraw()
 
 func _setup_cells(team_id: int) -> Array[Vector2i]:
     return setup_blue if team_id == 1 else setup_red
@@ -1265,6 +1323,7 @@ func _reset_board(kickoff_team: int = 1) -> void:
     referee_warning = false
     pieces.clear()
     fx_progress = 1.0
+    fx_landing_time = 0.0
     capture_sequence_running = false
     fx_victim_index = -1
     fx_impact_time = 0.0
@@ -1316,7 +1375,7 @@ func _new_match() -> void:
     half_remaining = float(HALF_SECONDS)
     final_phase_active = false
     final_actions_remaining = FINAL_PHASE_ACTIONS
-    _start_setup()
+    _start_default_match()
 
 func _begin_final_phase() -> void:
     # One transition per half. IMPORTANT: arriving at 00:30 never ends a half.
@@ -1536,18 +1595,45 @@ func _draw_pause_screen() -> void:
     draw_rect(Rect2(Vector2.ZERO, size), Color("#0b0919", 0.76))
     draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.5), "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 35, Color("#ffcc80"))
     draw_string(ThemeDB.fallback_font, Vector2(12, size.y * 0.58), "Нажми ИГРАТЬ сверху, чтобы продолжить", HORIZONTAL_ALIGNMENT_CENTER, size.x - 24.0, 20, Color.WHITE)
-    draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 30.0), Color("#584166"))
-    draw_string(ThemeDB.fallback_font, Vector2(size.x - 99.0, 93.0), "ИГРАТЬ", HORIZONTAL_ALIGNMENT_CENTER, 95.0, 18, Color.WHITE)
+    if _landscape_mode():
+        draw_rect(Rect2(size.x - 172.0, 4.0, 164.0, 42.0), Color("#584166"))
+        draw_string(ThemeDB.fallback_font, Vector2(size.x - 168.0, 31.0), "ИГРАТЬ", HORIZONTAL_ALIGNMENT_CENTER, 155.0, 22, Color.WHITE)
+    else:
+        draw_rect(Rect2(size.x - 106.0, 73.0, 96.0, 30.0), Color("#584166"))
+        draw_string(ThemeDB.fallback_font, Vector2(size.x - 99.0, 93.0), "ИГРАТЬ", HORIZONTAL_ALIGNMENT_CENTER, 95.0, 18, Color.WHITE)
+
+func _landscape_mode() -> bool:
+    return size.x > size.y * 1.15
 
 func _geometry() -> Dictionary:
-    # Reserve space for the large match clock and a side-specific move clock.
-    var top_margin := 196.0
-    var bottom_margin := 144.0
-    var side_margin := 29.0
-    var usable := Vector2(max(1.0, size.x - 2.0 * side_margin), max(1.0, size.y - top_margin - bottom_margin))
-    var cell_size: float = floor(min(usable.x / COLS, usable.y / ROWS))
-    var offset := Vector2(floor((size.x - COLS * cell_size) / 2.0), floor(top_margin + (usable.y - ROWS * cell_size) / 2.0))
+    if _landscape_mode():
+        # 10 cells along the long edge, 8 along the short edge.
+        # HUD occupies the side columns; do not cover the board with buttons.
+        var top_margin: float = 48.0
+        var bottom_margin: float = 34.0
+        var side_margin: float = maxf(118.0, minf(192.0, size.x * 0.205))
+        var usable_width: float = maxf(100.0, size.x - 2.0 * side_margin)
+        var usable_height: float = maxf(100.0, size.y - top_margin - bottom_margin)
+        var cell_size: float = maxf(8.0, floor(minf(usable_width / ROWS, usable_height / COLS)))
+        var origin: Vector2 = Vector2(floor((size.x - ROWS * cell_size) * 0.5), floor(top_margin + (usable_height - COLS * cell_size) * 0.5))
+        return {"cell_size": cell_size, "offset": origin}
+    var top_margin: float = 196.0
+    var bottom_margin: float = 144.0
+    var side_margin: float = 29.0
+    var usable: Vector2 = Vector2(maxf(1.0, size.x - 2.0 * side_margin), maxf(1.0, size.y - top_margin - bottom_margin))
+    var cell_size: float = maxf(8.0, floor(minf(usable.x / COLS, usable.y / ROWS)))
+    var offset: Vector2 = Vector2(floor((size.x - COLS * cell_size) / 2.0), floor(top_margin + (usable.y - ROWS * cell_size) / 2.0))
     return {"cell_size": cell_size, "offset": offset}
+
+func _board_pos(cell: Vector2i, origin: Vector2, cell_size: float) -> Vector2:
+    if _landscape_mode():
+        # Red (row 0) on the RIGHT, blue (row 9) on the LEFT.
+        # Textures remain upright; only logical cell coordinates rotate.
+        return origin + Vector2(ROWS - 1 - cell.x, cell.y) * cell_size
+    return origin + Vector2(cell.y, cell.x) * cell_size
+
+func _board_center(cell: Vector2i, origin: Vector2, cell_size: float) -> Vector2:
+    return _board_pos(cell, origin, cell_size) + Vector2.ONE * cell_size * 0.5
 
 func _piece_at(cell: Vector2i) -> int:
     for i in pieces.size():
@@ -1663,7 +1749,7 @@ func _gui_input(event: InputEvent) -> void:
             var ball_pos: Vector2 = _drag_cell_center(ball_cell)
             if touch_point.distance_to(ball_pos) <= float(_geometry()["cell_size"]) * 0.45:
                 ball_wiggle = 0.65
-        if touch_point.y < 115.0 and touch_point.x > size.x - 107.0 and not customization_open and not setup_active and not game_over:
+        if ((_landscape_mode() and touch_point.x > size.x - 180.0 and touch_point.y < 57.0) or (not _landscape_mode() and touch_point.y < 115.0 and touch_point.x > size.x - 107.0)) and not customization_open and not setup_active and not game_over:
             paused_match = not paused_match
             drag_active = false
             drag_moved = false
@@ -1702,8 +1788,8 @@ func _gui_input(event: InputEvent) -> void:
             return
         _customization_tap(point)
         return
-    if point.y > size.y - 82.0:
-        if point.x >= size.x * 0.5:
+    if (_landscape_mode() and point.y > size.y - 88.0 and (point.x < 182.0 or point.x > size.x - 182.0)) or (not _landscape_mode() and point.y > size.y - 82.0):
+        if (_landscape_mode() and point.x > size.x - 182.0) or (not _landscape_mode() and point.x >= size.x * 0.5):
             _go_to_main_menu()
             return
         _new_match()
@@ -1713,9 +1799,7 @@ func _gui_input(event: InputEvent) -> void:
     var geometry := _geometry()
     var origin: Vector2 = geometry["offset"]
     var side: float = geometry["cell_size"]
-    var col := int(floor((point.x - origin.x) / side))
-    var row := int(floor((point.y - origin.y) / side))
-    var cell := Vector2i(row, col)
+    var cell: Vector2i = _drag_point_to_cell(point)
     if _inside(cell):
         _tap(cell)
 
@@ -2054,7 +2138,8 @@ func _fb_choose_action(moves: Array[Dictionary], depth: int) -> Dictionary:
 func _bot_turn() -> void:
     if not is_inside_tree():
         return
-    await get_tree().create_timer(0.77).timeout
+    # A shorter pause keeps the bot lively without changing its difficulty.
+    await get_tree().create_timer(0.43).timeout
     bot_pending = false
     if game_mode != 0 or turn != 2 or game_over or paused_match or celebrating or coin_remaining > 0.0 or halftime_remaining > 0.0:
         return
@@ -2124,6 +2209,35 @@ func _bot_turn() -> void:
     _finish_turn()
 
 # Central match time and large 20-second decision clock on the side now moving.
+func _draw_landscape_hud(font: Font) -> void:
+    var left_w: float = minf(174.0, size.x * 0.205)
+    var right_x: float = size.x - left_w
+    # Central match time above the playing field.
+    var time_x: float = size.x * 0.5 - 84.0
+    draw_rect(Rect2(time_x, 3.0, 168.0, 42.0), Color("#151323", 0.96))
+    draw_rect(Rect2(time_x, 3.0, 168.0, 42.0), Color("#e4a45e"), false, 2.0)
+    var shown: int = maxi(0, ceili(half_remaining))
+    draw_string(font, Vector2(time_x + 8.0, 17.0), "%d-Й ТАЙМ" % half_number, HORIZONTAL_ALIGNMENT_LEFT, 72.0, 14, Color("#ffd99c"))
+    draw_string(font, Vector2(time_x + 75.0, 34.0), "%02d:%02d" % [shown / 60, shown % 60], HORIZONTAL_ALIGNMENT_RIGHT, 87.0, 27, Color.WHITE)
+    # Safe side columns: large score, current team and decision timer.
+    draw_rect(Rect2(8.0, 62.0, left_w - 18.0, 93.0), Color("#102638", 0.95))
+    draw_string(font, Vector2(13.0, 86.0), "СЧЁТ", HORIZONTAL_ALIGNMENT_CENTER, left_w - 27.0, 19, Color("#b5eaff"))
+    draw_string(font, Vector2(13.0, 133.0), "%d : %d" % [scores[0], scores[1]], HORIZONTAL_ALIGNMENT_CENTER, left_w - 27.0, 37, Color.WHITE)
+    var moving_red: bool = turn == 2
+    var team_color: Color = Color("#ff7992") if moving_red else Color("#60d7ff")
+    draw_rect(Rect2(right_x + 4.0, 67.0, left_w - 12.0, 98.0), Color("#161825", 0.95))
+    draw_rect(Rect2(right_x + 4.0, 67.0, left_w - 12.0, 98.0), team_color, false, 2.0)
+    draw_string(font, Vector2(right_x + 8.0, 98.0), "ХОД КРАСНЫХ" if moving_red else "ХОД СИНИХ", HORIZONTAL_ALIGNMENT_CENTER, left_w - 20.0, 18, team_color)
+    draw_string(font, Vector2(right_x + 8.0, 149.0), "%02d" % ceili(decision_remaining), HORIZONTAL_ALIGNMENT_CENTER, left_w - 20.0, 39, Color("#ffd378") if decision_remaining <= 5.0 else Color.WHITE)
+    draw_rect(Rect2(size.x - 172.0, 4.0, 164.0, 42.0), Color("#443044"))
+    draw_string(font, Vector2(size.x - 167.0, 31.0), "ИГРАТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 154.0, 22, Color.WHITE)
+    if final_phase_active:
+        draw_string(font, Vector2(8.0, 192.0), "ФИНИШ: %d ХОДОВ" % final_actions_remaining, HORIZONTAL_ALIGNMENT_CENTER, left_w - 18.0, 17, Color("#ffd17e"))
+    elif consecutive_passes > 0:
+        draw_string(font, Vector2(8.0, 192.0), "ПАСЫ: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, left_w - 18.0, 17, Color("#ffd17e"))
+    draw_string(font, Vector2(8.0, 32.0), "MONSTER BALL", HORIZONTAL_ALIGNMENT_LEFT, left_w - 14.0, 19, Color("#ffd18e"))
+    draw_string(font, Vector2(8.0, 221.0), message, HORIZONTAL_ALIGNMENT_LEFT, left_w - 12.0, 15, Color("#bce9f0"))
+
 func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> void:
     # Leave touch coordinates of the pause control unchanged (top-right, y<115).
     var banner_width: float = maxf(104.0, minf(182.0, size.x - 212.0))
@@ -2171,16 +2285,18 @@ func _draw() -> void:
     var offset: Vector2 = geometry["offset"]
     _halloween_arena(offset, Vector2(COLS * side, ROWS * side))
     var font: Font = ThemeDB.fallback_font
-    if not setup_active:
+    if _landscape_mode():
+        _draw_landscape_hud(font)
+    elif not setup_active:
         _draw_match_clocks(offset, side, font)
-    _draw_referee(Vector2(size.x - 24.0, 168.0), 0.76)
-    # Fantasy stone board. Geometry and input coordinates stay unchanged.
-    var board_size := Vector2(COLS * side, ROWS * side)
+    _draw_referee(Vector2(size.x - 23.0, size.y * 0.64 if _landscape_mode() else 168.0), 0.76)
+    # Landscape rotates the GRID LAYOUT, not the character sprites or logic.
+    var board_size: Vector2 = Vector2(ROWS * side, COLS * side) if _landscape_mode() else Vector2(COLS * side, ROWS * side)
     draw_rect(Rect2(offset - Vector2(6, 6), board_size + Vector2(12, 12)), Color("#0b1925"))
     draw_rect(Rect2(offset - Vector2(4, 4), board_size + Vector2(8, 8)), Color("#db8b49"), false, 3.0)
     for row in ROWS:
         for col in COLS:
-            var pos := offset + Vector2(col, row) * side
+            var pos: Vector2 = _board_pos(Vector2i(row, col), offset, side)
             var rect := Rect2(pos, Vector2(side, side))
             var dark := (row + col) % 2 == 0
             var stone := Color("#152c3b") if dark else Color("#697786")
@@ -2203,45 +2319,75 @@ func _draw() -> void:
                 var rune := pos + Vector2.ONE * (side * 0.5)
                 draw_arc(rune, side * 0.22, 0.0, TAU, 20, Color("#4be4ef", 0.075), 1.0)
                 draw_line(rune + Vector2(-side * 0.12, 0), rune + Vector2(side * 0.12, 0), Color("#6fe5f1", 0.075), 1.0)
-    for col in range(COLS + 1):
-        var x := offset.x + col * side
-        draw_line(Vector2(x, offset.y), Vector2(x, offset.y + board_size.y), Color("#07131f", 0.6), 1.0)
-    for row in range(ROWS + 1):
-        var y := offset.y + row * side
-        draw_line(Vector2(offset.x, y), Vector2(offset.x + board_size.x, y), Color("#07131f", 0.6), 1.0)
-    draw_rect(Rect2(offset, board_size), Color("#e5a65c", 0.75), false, 2.0)
-    for col in COLS:
-        var letter := char(65 + col)
-        var x := offset.x + (col + 0.5) * side - 5.0
-        draw_string(font, Vector2(x, offset.y - 10), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#b9e5e8"))
-        draw_string(font, Vector2(x, offset.y + ROWS * side + 21), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#b9e5e8"))
-    for row in ROWS:
-        var label := str(ROWS - row)
-        var y := offset.y + (row + 0.5) * side + 5.0
-        draw_string(font, Vector2(offset.x - 23, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
-        draw_string(font, Vector2(offset.x + COLS * side + 7, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
-    # Glowing goal frames are BEHIND the pieces, outside the pitch.
-    var goal_left := offset.x + 2.0 * side
-    var goal_right := offset.x + 6.0 * side
-    var goal_depth: float = minf(12.0, side * 0.15)
-    for edge_y in [offset.y, offset.y + board_size.y]:
-        var sign_dir := -1.0 if edge_y == offset.y else 1.0
-        var a := Vector2(goal_left, edge_y)
-        var b := Vector2(goal_left, edge_y + goal_depth * sign_dir)
-        var c := Vector2(goal_right, edge_y + goal_depth * sign_dir)
-        var d := Vector2(goal_right, edge_y)
-        for thickness in [9.0, 5.0, 2.5]:
-            var glow := Color("#40e3ff", 0.12) if thickness == 9.0 else (Color("#4af5ff", 0.38) if thickness == 5.0 else Color("#bafaff"))
-            draw_line(a, b, glow, thickness)
-            draw_line(b, c, glow, thickness)
-            draw_line(c, d, glow, thickness)
+    if _landscape_mode():
+        for gx in range(ROWS + 1):
+            var x: float = offset.x + float(gx) * side
+            draw_line(Vector2(x, offset.y), Vector2(x, offset.y + board_size.y), Color("#07131f", 0.6), 1.0)
+        for gy in range(COLS + 1):
+            var y: float = offset.y + float(gy) * side
+            draw_line(Vector2(offset.x, y), Vector2(offset.x + board_size.x, y), Color("#07131f", 0.6), 1.0)
+        draw_rect(Rect2(offset, board_size), Color("#e5a65c", 0.75), false, 2.0)
+        for row in ROWS:
+            var x: float = offset.x + (ROWS - row - 0.5) * side - 8.0
+            draw_string(font, Vector2(x, offset.y - 6.0), str(ROWS - row), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+            draw_string(font, Vector2(x, offset.y + board_size.y + 16.0), str(ROWS - row), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+        for col in COLS:
+            var y: float = offset.y + (col + 0.5) * side + 4.0
+            draw_string(font, Vector2(offset.x - 18.0, y), char(65 + col), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+            draw_string(font, Vector2(offset.x + board_size.x + 6.0, y), char(65 + col), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+        # Original goal rows become the left/right ends of the wide field.
+        for edge_x in [offset.x, offset.x + board_size.x]:
+            var direction: float = -1.0 if edge_x == offset.x else 1.0
+            var goal_depth: float = minf(10.0, side * 0.15)
+            var top: Vector2 = Vector2(edge_x, offset.y + 2.0 * side)
+            var top_out: Vector2 = top + Vector2(direction * goal_depth, 0.0)
+            var bottom_out: Vector2 = Vector2(edge_x + direction * goal_depth, offset.y + 6.0 * side)
+            var bottom: Vector2 = Vector2(edge_x, offset.y + 6.0 * side)
+            for thickness in [9.0, 4.5, 2.0]:
+                var glow: Color = Color("#4af5ff", 0.14) if thickness == 9.0 else Color("#bafaff", 0.85)
+                draw_line(top, top_out, glow, thickness)
+                draw_line(top_out, bottom_out, glow, thickness)
+                draw_line(bottom_out, bottom, glow, thickness)
+    else:
+        for col in range(COLS + 1):
+            var x: float = offset.x + col * side
+            draw_line(Vector2(x, offset.y), Vector2(x, offset.y + board_size.y), Color("#07131f", 0.6), 1.0)
+        for row in range(ROWS + 1):
+            var y: float = offset.y + row * side
+            draw_line(Vector2(offset.x, y), Vector2(offset.x + board_size.x, y), Color("#07131f", 0.6), 1.0)
+        draw_rect(Rect2(offset, board_size), Color("#e5a65c", 0.75), false, 2.0)
+        for col in COLS:
+            var letter: String = char(65 + col)
+            var x: float = offset.x + (col + 0.5) * side - 5.0
+            draw_string(font, Vector2(x, offset.y - 10), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#b9e5e8"))
+            draw_string(font, Vector2(x, offset.y + ROWS * side + 21), letter, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("#b9e5e8"))
+        for row in ROWS:
+            var label: String = str(ROWS - row)
+            var y: float = offset.y + (row + 0.5) * side + 5.0
+            draw_string(font, Vector2(offset.x - 23, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+            draw_string(font, Vector2(offset.x + COLS * side + 7, y), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("#b9e5e8"))
+        # Old goal frames for portrait orientation.
+        var goal_left: float = offset.x + 2.0 * side
+        var goal_right: float = offset.x + 6.0 * side
+        var goal_depth: float = minf(12.0, side * 0.15)
+        for edge_y in [offset.y, offset.y + board_size.y]:
+            var sign_dir: float = -1.0 if edge_y == offset.y else 1.0
+            var a: Vector2 = Vector2(goal_left, edge_y)
+            var b: Vector2 = Vector2(goal_left, edge_y + goal_depth * sign_dir)
+            var c: Vector2 = Vector2(goal_right, edge_y + goal_depth * sign_dir)
+            var d: Vector2 = Vector2(goal_right, edge_y)
+            for thickness in [9.0, 5.0, 2.5]:
+                var glow: Color = Color("#40e3ff", 0.12) if thickness == 9.0 else (Color("#4af5ff", 0.38) if thickness == 5.0 else Color("#bafaff"))
+                draw_line(a, b, glow, thickness)
+                draw_line(b, c, glow, thickness)
+                draw_line(c, d, glow, thickness)
     if setup_active and not customization_open:
         _draw_setup_help(offset, side, font)
     for i in pieces.size():
         if not pieces[i]["alive"]:
             continue
         var cell: Vector2i = pieces[i]["cell"]
-        var center := offset + Vector2(cell.y + 0.5, cell.x + 0.5) * side
+        var center: Vector2 = _board_center(cell, offset, side)
         if i == selected:
             _magic_ring(center, side * 0.44, Color("#5eeeff"), true)
         var team: int = pieces[i]["team"]
@@ -2249,9 +2395,17 @@ func _draw() -> void:
         var token_side := side * 0.93
         var token_center: Vector2 = center
         if fx_piece == i and fx_progress < 1.0 and not drag_active:
-            var eased: float = fx_progress * fx_progress * (3.0 - 2.0 * fx_progress)
+            # Energetic launch with a softer landing instead of a heavy stone shuffle.
+            var eased: float = 1.0 - pow(1.0 - fx_progress, 3.0)
             token_center = _drag_cell_center(fx_from).lerp(_drag_cell_center(fx_to), eased)
-            token_center.y -= sin(fx_progress * PI) * side * (0.28 if fx_victim_index >= 0 else 0.035)
+            token_center.y -= sin(fx_progress * PI) * side * (0.32 if fx_victim_index >= 0 else 0.10)
+            # Three faint afterimages; purely draw calls (no sprites/particles to keep alive).
+            var motion_delta_p: Vector2 = token_center - _drag_cell_center(fx_from)
+            var trail_color: Color = Color("#5ae3ff") if team == 1 else Color("#ff715d")
+            for trail_step in 3:
+                var trail_pos: Vector2 = token_center - motion_delta_p * (0.16 + float(trail_step) * 0.17)
+                var trail_alpha: float = (0.23 - float(trail_step) * 0.05) * sin(fx_progress * PI)
+                draw_circle(trail_pos, side * (0.32 - float(trail_step) * 0.055), Color(trail_color.r, trail_color.g, trail_color.b, trail_alpha))
         if drag_active and drag_moved and cell == drag_origin:
             continue
         if not _draw_asset(key, Rect2(token_center - Vector2.ONE * token_side * 0.5, Vector2.ONE * token_side)):
@@ -2264,7 +2418,7 @@ func _draw() -> void:
             if not _draw_asset("ghost_pumpkin", Rect2(pumpkin_center - Vector2.ONE * pumpkin_size * 0.5, Vector2.ONE * pumpkin_size)):
                 _draw_ghost_pumpkin(pumpkin_center, side * 0.16)
     if ball_holder == -1:
-        var pumpkin_center := offset + Vector2(ball_cell.y + 0.5, ball_cell.x + 0.5) * side
+        var pumpkin_center: Vector2 = _board_center(ball_cell, offset, side)
         if ball_wiggle > 0.0:
             pumpkin_center += Vector2(sin(magic_clock * 26.0) * side * 0.10, cos(magic_clock * 22.0) * side * 0.06) * (ball_wiggle / 0.65)
         var pumpkin_size := side * 0.90
@@ -2386,6 +2540,16 @@ func _go_to_main_menu() -> void:
 
 func _draw_bottom_actions() -> void:
     var font: Font = ThemeDB.fallback_font
+    if _landscape_mode():
+        var w: float = minf(168.0, size.x * 0.205 - 8.0)
+        var y: float = size.y - 76.0
+        draw_rect(Rect2(8.0, y, w, 60.0), Color("#273d51"))
+        draw_rect(Rect2(size.x - w - 8.0, y, w, 60.0), Color("#684026"))
+        draw_rect(Rect2(8.0, y, w, 60.0), Color("#83d5e4"), false, 2.0)
+        draw_rect(Rect2(size.x - w - 8.0, y, w, 60.0), Color("#ffc17a"), false, 2.0)
+        draw_string(font, Vector2(12.0, y + 37.0), "НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_CENTER, w - 8.0, 18, Color.WHITE)
+        draw_string(font, Vector2(size.x - w - 4.0, y + 37.0), "МЕНЮ", HORIZONTAL_ALIGNMENT_CENTER, w - 8.0, 18, Color.WHITE)
+        return
     var y: float = size.y - 74.0
     var w: float = size.x * 0.5
     draw_rect(Rect2(4, y, w - 8, 61), Color("#273d51"))

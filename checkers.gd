@@ -1073,11 +1073,20 @@ func _inside(p: Vector2i) -> bool:
 func _piece(p: Vector2i) -> Dictionary:
     return board[p.x][p.y]
 
+func _landscape_mode() -> bool:
+    return size.x > size.y * 1.15
+
 func _geometry() -> Dictionary:
-    var side: float = floor(minf((size.x-58.0)/8.0, (size.y-265.0)/8.0))
-    side = maxf(8.0,side)
-    var origin := Vector2(floor((size.x-side*8.0)/2.0), maxf(177.0, floor((size.y-side*8.0)/2.0)+26.0))
-    return {"side":side,"origin":origin}
+    if _landscape_mode():
+        var playable_width: float = maxf(80.0, size.x - maxf(255.0, size.x * 0.40))
+        var playable_height: float = maxf(80.0, size.y - 24.0)
+        var side: float = maxf(8.0, floor(minf(playable_width / 8.0, playable_height / 8.0)))
+        var origin: Vector2 = Vector2(floor((size.x - side * 8.0) * 0.5), floor((size.y - side * 8.0) * 0.5))
+        return {"side": side, "origin": origin}
+    var side: float = floor(minf((size.x - 58.0) / 8.0, (size.y - 265.0) / 8.0))
+    side = maxf(8.0, side)
+    var origin: Vector2 = Vector2(floor((size.x - side * 8.0) / 2.0), maxf(177.0, floor((size.y - side * 8.0) / 2.0) + 26.0))
+    return {"side": side, "origin": origin}
 
 func _captures(p: Vector2i) -> Array:
     var result: Array = []
@@ -1211,7 +1220,10 @@ func _gui_input(event: InputEvent) -> void:
     if finished:
         if win_celebration_time > 0.0:
             return
-        if pos.y > size.y - 82.0:
+        if _landscape_mode() and pos.y > size.y - 84.0 and (pos.x < 185.0 or pos.x > size.x - 185.0):
+            if pos.x > size.x - 185.0: _go_to_main_menu()
+            else: _new_game()
+        elif not _landscape_mode() and pos.y > size.y - 82.0:
             if pos.x >= size.x * 0.5: _go_to_main_menu()
             else: _new_game()
         else:
@@ -1223,8 +1235,8 @@ func _gui_input(event: InputEvent) -> void:
             return
         _customization_tap(pos)
         return
-    if pos.y > size.y - 82.0:
-        if pos.x >= size.x * 0.5:
+    if (_landscape_mode() and pos.y > size.y - 84.0 and (pos.x < 185.0 or pos.x > size.x - 185.0)) or (not _landscape_mode() and pos.y > size.y - 82.0):
+        if (_landscape_mode() and pos.x > size.x - 185.0) or (not _landscape_mode() and pos.x >= size.x * 0.5):
             _go_to_main_menu()
             return
         _new_game()
@@ -1258,10 +1270,18 @@ func _draw() -> void:
     var o: Vector2 = g["origin"]
     _halloween_arena(o, Vector2(s * 8.0, s * 8.0))
     var font: Font = ThemeDB.fallback_font
-    draw_string(font, Vector2(18, 35), "MONSTER BALL / HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 19, Color("#ffbb74"))
-    draw_string(font, Vector2(18, 72), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 17, Color("#d9f6f9"))
-    draw_rect(Rect2(size.x - 107.0, 79.0, 99.0, 30.0), Color("#413451"))
-    draw_string(font, Vector2(size.x - 104.0, 99.0), "ПРОДОЛЖИТЬ" if paused_checkers else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 93.0, 12, Color.WHITE)
+    if _landscape_mode():
+        var sidebar_w: float = minf(172.0, size.x * 0.205)
+        draw_string(font, Vector2(12.0, 29.0), "MONSTER BALL", HORIZONTAL_ALIGNMENT_LEFT, sidebar_w - 12.0, 20, Color("#ffbb74"))
+        draw_string(font, Vector2(12.0, 82.0), "ШАШКИ", HORIZONTAL_ALIGNMENT_LEFT, sidebar_w - 12.0, 24, Color("#ffe0ae"))
+        draw_string(font, Vector2(12.0, 122.0), message, HORIZONTAL_ALIGNMENT_LEFT, sidebar_w - 12.0, 17, Color("#d9f6f9"))
+        draw_rect(Rect2(size.x - 115.0, 74.0, 107.0, 42.0), Color("#413451"))
+        draw_string(font, Vector2(size.x - 112.0, 101.0), "ИГРАТЬ" if paused_checkers else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 100.0, 17, Color.WHITE)
+    else:
+        draw_string(font, Vector2(18, 35), "MONSTER BALL / HALLOWEEN", HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 19, Color("#ffbb74"))
+        draw_string(font, Vector2(18, 72), message, HORIZONTAL_ALIGNMENT_LEFT, size.x - 36, 17, Color("#d9f6f9"))
+        draw_rect(Rect2(size.x - 107.0, 79.0, 99.0, 30.0), Color("#413451"))
+        draw_string(font, Vector2(size.x - 104.0, 99.0), "ПРОДОЛЖИТЬ" if paused_checkers else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 93.0, 12, Color.WHITE)
     draw_rect(Rect2(o-Vector2(5,5),Vector2(s*8+10,s*8+10)),Color("#efad62"),false,3.0)
     for r in N:
         for c in N:
@@ -1628,6 +1648,16 @@ func _go_to_main_menu() -> void:
 
 func _draw_bottom_actions() -> void:
     var font: Font = ThemeDB.fallback_font
+    if _landscape_mode():
+        var w: float = minf(168.0, size.x * 0.205 - 8.0)
+        var y: float = size.y - 76.0
+        draw_rect(Rect2(8.0, y, w, 60.0), Color("#273d51"))
+        draw_rect(Rect2(size.x - w - 8.0, y, w, 60.0), Color("#684026"))
+        draw_rect(Rect2(8.0, y, w, 60.0), Color("#83d5e4"), false, 2.0)
+        draw_rect(Rect2(size.x - w - 8.0, y, w, 60.0), Color("#ffc17a"), false, 2.0)
+        draw_string(font, Vector2(12.0, y + 37.0), "НОВАЯ ИГРА", HORIZONTAL_ALIGNMENT_CENTER, w - 8.0, 18, Color.WHITE)
+        draw_string(font, Vector2(size.x - w - 4.0, y + 37.0), "МЕНЮ", HORIZONTAL_ALIGNMENT_CENTER, w - 8.0, 18, Color.WHITE)
+        return
     var y: float = size.y - 74.0
     var w: float = size.x * 0.5
     draw_rect(Rect2(4, y, w - 8, 61), Color("#273d51"))
