@@ -17,3 +17,5 @@ textures/vram_compression/import_etc2_astc=true
 audio/driver/enable_input=false
 [input_devices]
 pointing/emulate_mouse_from_touch=true
+[audio]
+general/default_playback_type.web=0
