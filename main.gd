@@ -1067,7 +1067,20 @@ func _check_elimination() -> bool:
         return true
     return false
 
+# RESIZABLE WEB/PWA SCREEN: prevent the original portrait aspect ratio from
+# letterboxing the game when the device rotates. Keeps both touch and draw
+# coordinates in the same live, full-screen Control coordinate system.
+func _mb_enable_adaptive_screen() -> void:
+    var game_window: Window = get_window()
+    game_window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+    game_window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+    # A square logical base lets the *same* project expand in either direction.
+    game_window.content_scale_size = Vector2i(720, 720)
+    set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    resized.connect(queue_redraw)
+
 func _ready() -> void:
+    _mb_enable_adaptive_screen()
     mouse_filter = Control.MOUSE_FILTER_STOP
     _setup_game_audio()
     if ResourceLoader.exists("res://assets/game_font.ttf"):
@@ -2283,7 +2296,7 @@ func _draw() -> void:
     var geometry := _geometry()
     var side: float = geometry["cell_size"]
     var offset: Vector2 = geometry["offset"]
-    _halloween_arena(offset, Vector2(COLS * side, ROWS * side))
+    _halloween_arena(offset, Vector2(ROWS * side, COLS * side) if _landscape_mode() else Vector2(COLS * side, ROWS * side))
     var font: Font = ThemeDB.fallback_font
     if _landscape_mode():
         _draw_landscape_hud(font)

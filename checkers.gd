@@ -902,7 +902,20 @@ func _draw_game_fx() -> void:
             draw_circle(center + Vector2(0, side * 0.23), side * 0.12, Color("#e5ba4d"))
             draw_string(ThemeDB.fallback_font, center + Vector2(-side * 0.1, side * 0.28), "Д", HORIZONTAL_ALIGNMENT_LEFT, -1, int(side * 0.19), Color("#22150a"))
 
+# RESIZABLE WEB/PWA SCREEN: prevent the original portrait aspect ratio from
+# letterboxing the game when the device rotates. Keeps both touch and draw
+# coordinates in the same live, full-screen Control coordinate system.
+func _mb_enable_adaptive_screen() -> void:
+    var game_window: Window = get_window()
+    game_window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+    game_window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+    # A square logical base lets the *same* project expand in either direction.
+    game_window.content_scale_size = Vector2i(720, 720)
+    set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    resized.connect(queue_redraw)
+
 func _ready() -> void:
+    _mb_enable_adaptive_screen()
     mouse_filter = Control.MOUSE_FILTER_STOP
     _setup_game_audio()
     if ResourceLoader.exists("res://assets/game_font.ttf"):

@@ -140,7 +140,27 @@ func _sound_slider(title: String, key: String, fallback: float) -> void:
     )
     panel.add_child(slider)
 
+# Full-screen responsive canvas for Web/PWA on iPhone and Android.
+# The menu remains the same, but its panel fits either orientation.
+var _mb_menu_last_landscape: bool = false
+
+func _mb_enable_adaptive_screen() -> void:
+    var game_window: Window = get_window()
+    game_window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+    game_window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+    game_window.content_scale_size = Vector2i(720, 720)
+    set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    _mb_menu_last_landscape = size.x > size.y * 1.15
+    resized.connect(_mb_on_menu_resized)
+
+func _mb_on_menu_resized() -> void:
+    var landscape_now: bool = size.x > size.y * 1.15
+    if landscape_now != _mb_menu_last_landscape:
+        _mb_menu_last_landscape = landscape_now
+        _build()
+
 func _ready() -> void:
+    _mb_enable_adaptive_screen()
     mouse_filter = Control.MOUSE_FILTER_STOP
     backdrop = load("res://assets/menu_heroes.png")
     _read_audio_settings()
@@ -167,10 +187,11 @@ func _build() -> void:
     background_test_status = null
     panel = VBoxContainer.new()
     panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-    panel.anchor_left = 0.07
-    panel.anchor_right = 0.93
-    panel.anchor_top = 0.23 if section == "profile" else (0.34 if section == "about" else (0.39 if section == "sound" else 0.55))
-    panel.anchor_bottom = 0.98
+    var wide_menu: bool = size.x > size.y * 1.15
+    panel.anchor_left = 0.24 if wide_menu else 0.07
+    panel.anchor_right = 0.76 if wide_menu else 0.93
+    panel.anchor_top = 0.04 if wide_menu else (0.23 if section == "profile" else (0.34 if section == "about" else (0.39 if section == "sound" else 0.55)))
+    panel.anchor_bottom = 0.97 if wide_menu else 0.98
     panel.offset_left = 0
     panel.offset_right = 0
     panel.offset_top = 0
