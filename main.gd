@@ -67,6 +67,13 @@ var phase_after_goal: bool = false
 var consecutive_passes: int = 0
 var last_pass_sender: int = -1
 var pass_side: int = 0
+# The attack must gain ground. Passing backwards and moving unrelated pieces
+# cannot reset the record or consume the rest of a half for free.
+const PASSIVE_ACTION_LIMIT: int = 3
+var attacking_team: int = 0
+var attack_best_progress: int = -1
+var passive_actions: int = 0
+var passive_notice_seconds: float = 0.0
 var ball_wiggle: float = 0.0
 var referee_warning: bool = false
 var kickoff_whistle_pending: bool = false
@@ -245,6 +252,9 @@ func _process(delta: float) -> void:
     # A complete pause freezes all match, celebration, transition and animation timers.
     if paused_match:
         return
+    if passive_notice_seconds > 0.0:
+        passive_notice_seconds = maxf(0.0, passive_notice_seconds - delta)
+        queue_redraw()
     # Each human team gets its own 30-second pre-match placement window.
     # Match time and the 20-second decision timer remain frozen during setup.
     if setup_active and not customization_open:
@@ -1080,6 +1090,8 @@ func _mb_enable_adaptive_screen() -> void:
     resized.connect(queue_redraw)
 
 func _ready() -> void:
+    # Mobile Web: cap rendering to reduce sustained GPU/CPU heat.
+    Engine.max_fps = 30
     _mb_enable_adaptive_screen()
     mouse_filter = Control.MOUSE_FILTER_STOP
     _setup_game_audio()
@@ -1329,6 +1341,10 @@ func _reset_board(kickoff_team: int = 1) -> void:
     consecutive_passes = 0
     last_pass_sender = -1
     pass_side = 0
+    attacking_team = 0
+    attack_best_progress = -1
+    passive_actions = 0
+    passive_notice_seconds = 0.0
     paused_match = false
     if halftime_player != null:
         halftime_player.stop()
@@ -1622,9 +1638,11 @@ func _geometry() -> Dictionary:
     if _landscape_mode():
         # 10 cells along the long edge, 8 along the short edge.
         # HUD occupies the side columns; do not cover the board with buttons.
-        var top_margin: float = 48.0
-        var bottom_margin: float = 34.0
-        var side_margin: float = maxf(118.0, minf(192.0, size.x * 0.205))
+        # iPhone Safari/PWA may lose pixels to notches and browser chrome.
+        # Reserve larger safe gutters on every edge, including goal frames.
+        var top_margin: float = 75.0
+        var bottom_margin: float = 92.0
+        var side_margin: float = maxf(148.0, minf(220.0, size.x * 0.22))
         var usable_width: float = maxf(100.0, size.x - 2.0 * side_margin)
         var usable_height: float = maxf(100.0, size.y - top_margin - bottom_margin)
         var cell_size: float = maxf(8.0, floor(minf(usable_width / ROWS, usable_height / COLS)))
@@ -1718,7 +1736,7 @@ func _pass_ball(to_index: int) -> void:
     var score_before: Array = scores.duplicate()
     _finish_turn()
     # Keep the goal message if the other team's lone carrier gets stuck.
-    if not game_over and halftime_remaining <= 0.0 and scores == score_before:
+    if not game_over and halftime_remaining <= 0.0 and ball_holder >= 0 and scores == score_before:
         message = "ПАС! " + ("Ход голубых" if turn == 1 else "Ход красных")
     queue_redraw()
 
@@ -1917,11 +1935,70 @@ func _check_goal() -> bool:
         return true
     return false
 
+# Anti-stalling: a new record toward the opposing goal gives the team a fresh
+# attack window. The record never moves backward while the same side possesses
+# the ball, so alternating forward/back passes cannot fake real progress.
+func _attack_progress(team_id: int) -> int:
+    return ROWS - 1 - ball_cell.x if team_id == 1 else ball_cell.x
+
+func _update_attack_after_action(acting_team: int) -> bool:
+    if ball_holder < 0 or not bool(pieces[ball_holder]["alive"]):
+        attacking_team = 0
+        attack_best_progress = -1
+        passive_actions = 0
+        return false
+    var holder_team: int = int(pieces[ball_holder]["team"])
+    var progress: int = _attack_progress(holder_team)
+    if holder_team != attacking_team:
+        attacking_team = holder_team
+        attack_best_progress = progress
+        passive_actions = 0
+        return false
+    # The defender's turn never counts as delay by the team in possession.
+    if acting_team != holder_team:
+        return false
+    if progress > attack_best_progress:
+        attack_best_progress = progress
+        passive_actions = 0
+    else:
+        passive_actions += 1
+    return passive_actions >= PASSIVE_ACTION_LIMIT
+
+func _passive_turnover(old_team: int) -> void:
+    # No extra goal/capture points: a free ball at midfield is the penalty.
+    var opponent: int = 3 - old_team
+    attacking_team = 0
+    attack_best_progress = -1
+    passive_actions = 0
+    passive_notice_seconds = 2.8
+    consecutive_passes = 0
+    last_pass_sender = -1
+    pass_side = 0
+    selected = -1
+    drag_active = false
+    drag_moved = false
+    drag_input_touch = false
+    drag_origin = Vector2i(-1, -1)
+    pass_fx_progress = 1.0
+    _spawn_free_ball_center()
+    turn = opponent
+    decision_remaining = DECISION_SECONDS
+    referee_warning = false
+    message = "ПАССИВНАЯ ИГРА! МЯЧ В ЦЕНТРЕ — ХОД " + ("СИНИХ" if opponent == 1 else "КРАСНЫХ")
+    _play_sfx("time_warning")
+    queue_redraw()
+    if game_mode == 0 and turn == 2 and not game_over:
+        _schedule_bot()
+
 func _finish_turn() -> void:
     selected = -1
+    var passive_penalty: bool = _update_attack_after_action(turn)
     # If the last move used the final three seconds, blow the whistle
     # before handing the turn over or scheduling the red bot.
     if _complete_action_clock():
+        return
+    if passive_penalty:
+        _passive_turnover(turn)
         return
     turn = 2 if turn == 1 else 1
     decision_remaining = DECISION_SECONDS
@@ -2246,6 +2323,8 @@ func _draw_landscape_hud(font: Font) -> void:
     draw_string(font, Vector2(size.x - 167.0, 31.0), "ИГРАТЬ" if paused_match else "ПАУЗА", HORIZONTAL_ALIGNMENT_CENTER, 154.0, 22, Color.WHITE)
     if final_phase_active:
         draw_string(font, Vector2(8.0, 192.0), "ФИНИШ: %d ХОДОВ" % final_actions_remaining, HORIZONTAL_ALIGNMENT_CENTER, left_w - 18.0, 17, Color("#ffd17e"))
+    elif attacking_team > 0:
+        draw_string(font, Vector2(8.0, 192.0), "АТАКА: %d/%d" % [passive_actions, PASSIVE_ACTION_LIMIT], HORIZONTAL_ALIGNMENT_CENTER, left_w - 18.0, 17, Color("#ffd17e"))
     elif consecutive_passes > 0:
         draw_string(font, Vector2(8.0, 192.0), "ПАСЫ: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, left_w - 18.0, 17, Color("#ffd17e"))
     draw_string(font, Vector2(8.0, 32.0), "MONSTER BALL", HORIZONTAL_ALIGNMENT_LEFT, left_w - 14.0, 19, Color("#ffd18e"))
@@ -2276,6 +2355,8 @@ func _draw_match_clocks(board_origin: Vector2, cell_side: float, font: Font) -> 
     draw_string(font, Vector2(10.0, 123.0), message, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 17, Color("#d9f6f9"))
     if decisive_phase:
         draw_string(font, Vector2(10.0, 140.0), "ФИНИШ: ОСТАЛОСЬ ХОДОВ — %d" % final_actions_remaining, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 16, Color("#ffca83"))
+    elif attacking_team > 0:
+        draw_string(font, Vector2(10.0, 140.0), "АТАКА БЕЗ ПРОДВИЖЕНИЯ: %d/%d" % [passive_actions, PASSIVE_ACTION_LIMIT], HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 16, Color("#ffca83"))
     elif consecutive_passes > 0:
         draw_string(font, Vector2(10.0, 140.0), "ПАСОВ ПОДРЯД: %d/2" % consecutive_passes, HORIZONTAL_ALIGNMENT_CENTER, size.x - 20.0, 16, Color("#ffca83"))
     # The RED team defends the top, BLUE the bottom. Show ONLY the active team.
@@ -2443,6 +2524,13 @@ func _draw() -> void:
     if celebrating and not _capture_motion_active():
         _draw_halloween_party(1.0 - celebration_time / maxf(0.01, celebration_duration), celebration_team, celebration_final)
     _draw_bottom_actions()
+    if passive_notice_seconds > 0.0 and not celebrating and not game_over:
+        var notice_width: float = minf(510.0, size.x - 28.0)
+        var notice_rect := Rect2(Vector2((size.x - notice_width) * 0.5, size.y * 0.42), Vector2(notice_width, 74.0))
+        draw_rect(notice_rect, Color("#161426", 0.95))
+        draw_rect(notice_rect, Color("#ffc16f"), false, 2.5)
+        draw_string(font, notice_rect.position + Vector2(5.0, 28.0), "ПАССИВНАЯ ИГРА!", HORIZONTAL_ALIGNMENT_CENTER, notice_width - 10.0, 22, Color("#ffd38c"))
+        draw_string(font, notice_rect.position + Vector2(5.0, 55.0), "МЯЧ В ЦЕНТРЕ — ХОД СИНИХ" if turn == 1 else "МЯЧ В ЦЕНТРЕ — ХОД КРАСНЫХ", HORIZONTAL_ALIGNMENT_CENTER, notice_width - 10.0, 16, Color.WHITE)
     if paused_match:
         _draw_pause_screen()
     elif coin_remaining > 0.0:
